@@ -1311,6 +1311,44 @@ function getHostPhaseIndex(mode: HostLoadingMode, status: string, dmPhase?: stri
   return 0;
 }
 
+/**
+ * Smooths a discrete progress target (updated by the 2-6s campaign poll) into
+ * a continuously animating value: eases up to the target on jumps, then creeps
+ * toward `cap` while waiting for the next poll. Never regresses.
+ */
+function useSmoothedProgress(target: number, cap: number = target): number {
+  const [value, setValue] = useState(target);
+  const ref = useRef({ v: target, target, cap });
+  ref.current.target = target;
+  ref.current.cap = Math.max(target, cap);
+  useEffect(() => {
+    if (typeof window !== "undefined" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      ref.current.v = target;
+      setValue(target);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      const s = ref.current;
+      let v = s.v;
+      if (v < s.target) v = Math.min(s.target, v + Math.max((s.target - v) * 1.6, 0.04) * dt);
+      else if (v < s.cap) v = Math.min(s.cap, v + 0.015 * dt);
+      if (Math.abs(v - s.v) > 0.0004) {
+        s.v = v;
+        setValue(v);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target]);
+  return value;
+}
+
 function StatusTimeline({ status, mode = "campaign" }: { status: string; mode?: "campaign" | "character" }) {
   const steps = mode === "campaign" ? INITIAL_CAMPAIGN_PHASES : LOADING_STEPS_CHARACTER;
   const currentStep = getStepIndex(status, steps);
@@ -1462,7 +1500,10 @@ function CinematicPortalScene({
       let stepProgressState = stepProgress;
       let phaseKeyState = phaseKey;
       let phaseBlend = mode === "lobby" ? 0 : 1;
+      let stepSmooth = stepProgress;
+      let speedCurrent = mode === "lobby" ? 0.45 : 1.0 + stepProgress * 2.5;
       let localPlayerIdState = localPlayerId;
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
       const hexFromColor = (c?: string): number => {
         if (!c) return 0xffd700;
@@ -1985,10 +2026,17 @@ function CinematicPortalScene({
         const target = modeState === "lobby" ? 0 : 1;
         phaseBlend += (target - phaseBlend) * Math.min(1, dt * 1.6);
         const sync = modeState === "player-sync" ? 1 : 0;
-        // Lobby is slow and serene; loading is fast and chaotic (charges up)
-        const speed = modeState === "lobby"
-          ? 0.45
-          : 1.0 + stepProgressState * 2.5 + Math.sin(t * 8) * 0.15;
+        // Lobby is slow and serene; loading charges up. Ease between the two
+        // (~2s) instead of jumping so mode changes read as a ramp, not a cut.
+        stepSmooth += (stepProgressState - stepSmooth) * Math.min(1, dt * 1.2);
+        const speedTarget = modeState === "lobby" ? 0.45 : 1.0 + stepSmooth * 2.5;
+        speedCurrent += (speedTarget - speedCurrent) * Math.min(1, dt * 0.9);
+        if (reducedMotion) {
+          phaseBlend = target;
+          stepSmooth = stepProgressState;
+          speedCurrent = speedTarget * 0.5;
+        }
+        const speed = speedCurrent + (reducedMotion ? 0 : Math.sin(t * 8) * 0.15 * phaseBlend);
 
         // Phase-specific intensity multipliers
         const pSignal = phaseKeyState === "signal" ? 1 : 0;
@@ -4483,6 +4531,10 @@ function JoinLoadingView({
   const phases = getHostPhases(mode);
   const currentStep = campaign ? getHostPhaseIndex(mode, status || "", campaign.dmPhase) : 0;
   const stepProgress = mode === "lobby" ? 0 : Math.min(1, currentStep / Math.max(1, phases.length - 1));
+  const displayProgress = useSmoothedProgress(
+    stepProgress,
+    Math.min(1, stepProgress + 0.6 / Math.max(1, phases.length - 1))
+  );
   const activePhase = phases[currentStep] || phases[0];
 
   const portalPlayers = useMemo<PortalPlayer[]>(
@@ -4497,7 +4549,7 @@ function JoinLoadingView({
           <CinematicPortalScene
             isActive={true}
             mode={mode}
-            stepProgress={stepProgress}
+            stepProgress={displayProgress}
             phaseKey={activePhase?.key || "signal"}
             players={portalPlayers}
             localPlayerId={localPlayer?.id}
@@ -4513,6 +4565,10 @@ function JoinLoadingView({
       )}
       <h2>{title || "Setting Up Character..."}</h2>
       <p className="loading-status">{status || `The ${flavor.dmName} is reviewing your background and forging your character sheet...`}</p>
+      <div className="controller-progress" role="progressbar" aria-valuenow={Math.round(displayProgress * 100)} aria-valuemin={0} aria-valuemax={100}>
+        <div className="controller-progress-bar"><div className="controller-progress-fill" style={{ width: `${displayProgress * 100}%` }} /></div>
+        <span className="controller-progress-pct">{Math.round(displayProgress * 100)}%</span>
+      </div>
       <StatusTimeline status={status || ""} mode="character" />
       <CyclingTipBox variant={themeOf(campaign)} />
     </section>

@@ -2674,6 +2674,41 @@ textarea { min-height: 7rem; resize: vertical; }
   pointer-events: none;
 }
 
+/* Smooth loading progress bar on the controller loading screen */
+.controller-progress {
+  position: relative;
+  z-index: 10;
+  width: min(24rem, 85vw);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.8rem auto 0;
+}
+
+.controller-progress-bar {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.controller-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--gold), #fff5dc);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--gold) 50%, transparent);
+}
+
+.controller-progress-pct {
+  font: 700 0.7rem 'Inter', system-ui, sans-serif;
+  color: var(--gold);
+  letter-spacing: 0.06em;
+  min-width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .status-timeline {
   position: relative;
   z-index: 10;
