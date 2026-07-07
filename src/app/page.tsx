@@ -2477,7 +2477,7 @@ function CinematicPortalScene({
   return <div ref={mountRef} className="threejs-portal-mount" />;
 }
 
-function CinematicLoadingOverlay({ campaign, status, mode, threeDEnabled }: { campaign: Campaign; status: string; mode: HostLoadingMode; threeDEnabled: boolean }) {
+function CinematicLoadingOverlay({ campaign, status, mode, threeDEnabled, leaving }: { campaign: Campaign; status: string; mode: HostLoadingMode; threeDEnabled: boolean; leaving?: boolean }) {
   const isLobby = mode === "lobby";
   const isPlayerSync = mode === "player-sync";
   const isActive = !isLobby;
@@ -2496,7 +2496,7 @@ function CinematicLoadingOverlay({ campaign, status, mode, threeDEnabled }: { ca
   const flavor = flavorOf(campaign.campaignType);
 
   return (
-    <div className={`cinematic-overlay cinematic-${mode}`}>
+    <div className={`cinematic-overlay cinematic-${mode} ${leaving ? "cinematic-leaving" : ""}`}>
       {/* Full 3D Portal Scene, or CSS-only backdrop when 3D is off */}
       {threeDEnabled ? (
         <CinematicPortalScene
@@ -2679,6 +2679,27 @@ function SceneStage({
     (campaign.status === "active" && isInitialIntro) ||
     (hostLoadingMode === "player-sync" && !!campaign.dmStatus);
 
+  // Overlay exit choreography: instead of unmounting instantly, play a 1.2s
+  // exit (flash + fade) while the game screen scale-fades in underneath.
+  // dmStatus polling can flap showMagicalLoading; "shown" may re-enter from
+  // "leaving" safely.
+  const [overlayVis, setOverlayVis] = useState<"shown" | "leaving" | "gone">(showMagicalLoading ? "shown" : "gone");
+  const [revealing, setRevealing] = useState(false);
+  useEffect(() => {
+    if (showMagicalLoading) {
+      setOverlayVis("shown");
+      setRevealing(false);
+      return;
+    }
+    setOverlayVis((v) => (v === "shown" ? "leaving" : v));
+  }, [showMagicalLoading]);
+  useEffect(() => {
+    if (overlayVis !== "leaving") return;
+    setRevealing(true);
+    const t = setTimeout(() => setOverlayVis("gone"), 1200);
+    return () => clearTimeout(t);
+  }, [overlayVis]);
+
   const showOverlay = showDice || charging;
 
   return (
@@ -2686,7 +2707,7 @@ function SceneStage({
       <SmoothBackground imageUrl={campaign.currentImageUrl} />
       <div className="scene-vignette" />
       
-      <div className="stage-grid-layout" style={(campaign.questLog && campaign.showQuestOnTV !== false) ? { gridTemplateColumns: "280px minmax(0, 1fr) 280px" } : undefined}>
+      <div className={`stage-grid-layout ${revealing ? "revealing" : ""}`} style={(campaign.questLog && campaign.showQuestOnTV !== false) ? { gridTemplateColumns: "280px minmax(0, 1fr) 280px" } : undefined}>
         {campaign.questLog && campaign.showQuestOnTV !== false && (
           <aside className="host-quest-log">
             <h3 className="quest-log-title">Quest Log</h3>
@@ -2731,12 +2752,13 @@ function SceneStage({
         <HostPartyBar campaign={campaign} />
       </div>
 
-      {showMagicalLoading && (
+      {overlayVis !== "gone" && (
         <CinematicLoadingOverlay
           campaign={campaign}
           status={campaign.dmStatus || (campaign.status === "lobby" ? "Gathering party..." : "Preparing the initial scenario...")}
           mode={hostLoadingMode}
           threeDEnabled={threeDEnabled}
+          leaving={overlayVis === "leaving"}
         />
       )}
 

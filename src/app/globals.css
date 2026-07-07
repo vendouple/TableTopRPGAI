@@ -1428,6 +1428,35 @@ textarea { min-height: 7rem; resize: vertical; }
   mix-blend-mode: overlay;
 }
 
+/* ---- Exit choreography: overlay brightens/flashes out, game reveals ---- */
+.cinematic-overlay.cinematic-leaving {
+  animation: cin-exit 1.2s ease-in both;
+  pointer-events: none;
+}
+
+@keyframes cin-exit {
+  0% { opacity: 1; transform: scale(1); filter: brightness(1); }
+  35% { opacity: 1; filter: brightness(1.6); }
+  100% { opacity: 0; transform: scale(1.06); filter: brightness(2.2); }
+}
+
+.cinematic-leaving .cinematic-hud {
+  animation: cin-hud-out 0.5s ease both;
+}
+
+@keyframes cin-hud-out {
+  to { opacity: 0; transform: translateY(-10px); }
+}
+
+.stage-grid-layout.revealing {
+  animation: stage-reveal 1.4s 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes stage-reveal {
+  from { opacity: 0; transform: scale(0.965); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 /* ---- Non-3D fallback backdrop (minor effects when 3D is off) ---- */
 .cinematic-fallback-backdrop {
   position: absolute;
