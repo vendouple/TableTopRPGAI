@@ -101,6 +101,48 @@ export type ChatMessage = {
   createdAt: string;
 };
 
+/**
+ * Mood palette the DM can set with the set_ambience tool. The host TV maps
+ * each mood to a particle palette, fog density, color grade, and music bias.
+ */
+export type AmbienceMood =
+  | "calm"
+  | "tense"
+  | "battle"
+  | "mystery"
+  | "dread"
+  | "triumph"
+  | "wonder"
+  | "somber";
+
+export type Ambience = {
+  mood: AmbienceMood;
+  /** 0..1 — how strongly the TV leans into the mood (particles, grade, pulse). */
+  intensity: number;
+  /** Optional flavor note, e.g. "rain hammers the tin roof". */
+  note?: string;
+  updatedAt: string;
+};
+
+export type StageEffectKind =
+  | "shake"
+  | "flash"
+  | "embers"
+  | "fog"
+  | "rain"
+  | "snow"
+  | "darkness"
+  | "heartbeat";
+
+/** One-shot cinematic effect queued by the DM via trigger_effect. */
+export type StageEffect = {
+  id: string;
+  kind: StageEffectKind;
+  /** 0..1 strength. */
+  strength: number;
+  createdAt: string;
+};
+
 export type SceneImage = {
   id: string;
   url: string;
@@ -137,6 +179,8 @@ export type Campaign = {
   images: SceneImage[];
   portraits: PortraitImage[];
   currentImageUrl?: string;
+  ambience?: Ambience;
+  effects?: StageEffect[];
   dmStatus?: string;
   dmPhase?: DmPhase;
   messages: ChatMessage[];

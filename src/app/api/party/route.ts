@@ -146,6 +146,17 @@ export async function POST(request: Request) {
         return NextResponse.json({ campaign });
       }
 
+      if (action === "setBackground") {
+        const campaign = await getCampaign(campaignId);
+        const url = String(body.url || "").trim();
+        if (!url || !campaign.images.some((img) => img.url === url)) {
+          return NextResponse.json({ error: "Unknown background url" }, { status: 400 });
+        }
+        campaign.currentImageUrl = url;
+        await saveCampaign(campaign);
+        return NextResponse.json({ campaign });
+      }
+
       if (action === "updateSettings") {
         const campaign = await getCampaign(campaignId);
         serverLog("API party", `Updating settings for campaign: ${campaignId}`);

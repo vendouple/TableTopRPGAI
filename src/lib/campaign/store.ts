@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile, appendFile, rm } from "fs/promises";
 import path from "path";
-import { Campaign, CampaignSummary, CampaignType, ChatMessage, DisplayEvent, Player, StoryCharacter, SuggestedAction } from "./types";
+import { Ambience, AmbienceMood, Campaign, CampaignSummary, CampaignType, ChatMessage, DisplayEvent, Player, StageEffect, StageEffectKind, StoryCharacter, SuggestedAction } from "./types";
 import { createId, createJoinCode } from "@/lib/utils/ids";
 
 const dataRoot = path.join(process.cwd(), "data", "campaigns");
@@ -301,6 +301,8 @@ function normalizeCampaign(raw: Partial<Campaign> & { suggestedActions?: unknown
     images: Array.isArray(raw.images) ? raw.images : [],
     portraits: Array.isArray(raw.portraits) ? raw.portraits : [],
     currentImageUrl: raw.currentImageUrl,
+    ambience: normalizeAmbience(raw.ambience),
+    effects: normalizeEffects(raw.effects),
     dmStatus: raw.dmStatus ? String(raw.dmStatus) : undefined,
     dmPhase: raw.dmPhase && typeof raw.dmPhase === "string" ? raw.dmPhase : undefined,
     messages: Array.isArray(raw.messages) ? raw.messages : [],
@@ -318,6 +320,46 @@ function normalizeCampaign(raw: Partial<Campaign> & { suggestedActions?: unknown
     createdAt: String(raw.createdAt || now),
     updatedAt: String(raw.updatedAt || now)
   };
+}
+
+const AMBIENCE_MOODS: AmbienceMood[] = ["calm", "tense", "battle", "mystery", "dread", "triumph", "wonder", "somber"];
+const EFFECT_KINDS: StageEffectKind[] = ["shake", "flash", "embers", "fog", "rain", "snow", "darkness", "heartbeat"];
+
+function normalizeAmbience(raw: unknown): Ambience | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const item = raw as Partial<Ambience>;
+  const mood = AMBIENCE_MOODS.includes(item.mood as AmbienceMood) ? (item.mood as AmbienceMood) : "calm";
+  const intensity = Math.max(0, Math.min(1, Number(item.intensity ?? 0.5)));
+  return {
+    mood,
+    intensity: Number.isFinite(intensity) ? intensity : 0.5,
+    note: typeof item.note === "string" ? item.note : undefined,
+    updatedAt: String(item.updatedAt || new Date().toISOString())
+  };
+}
+
+function normalizeEffects(raw: unknown): StageEffect[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .map((item) => ({
+      id: String(item.id || createId("fx")),
+      kind: EFFECT_KINDS.includes(item.kind as StageEffectKind) ? (item.kind as StageEffectKind) : "embers",
+      strength: Math.max(0, Math.min(1, Number(item.strength ?? 0.6))) || 0.6,
+      createdAt: String(item.createdAt || new Date().toISOString())
+    }))
+    .slice(-12);
+}
+
+export function pushStageEffect(campaign: Campaign, kind: StageEffectKind, strength: number) {
+  if (!campaign.effects) campaign.effects = [];
+  campaign.effects.push({
+    id: createId("fx"),
+    kind,
+    strength: Math.max(0, Math.min(1, strength)),
+    createdAt: new Date().toISOString()
+  });
+  campaign.effects = campaign.effects.slice(-12);
 }
 
 function normalizeCampaignType(raw: Partial<Campaign>): CampaignType {

@@ -42,6 +42,11 @@ Continuity & assets:
 - For new NPCs/monsters, call generate_image first, then save returned URL in portraitUrl.
 - Maintain quest_log.md with ONLY the current active objective and immediate tasks.
 
+Cinematic direction (you are also the stage director):
+- Call set_ambience when the emotional register shifts (combat begins, a mystery deepens, the party reaches safety, a tragedy lands). One call per shift, not per turn.
+- Call trigger_effect to punctuate big single beats: explosions (shake+flash), spellbursts (embers), horror stings (darkness/heartbeat), storms (rain/fog).
+- Prefer atmosphere over words: a mood change plus one tight paragraph beats three paragraphs.
+
 Speaker rules:
 - story[].speaker is "NARRATOR", "SYSTEM", or an NPC name.
 - Do not put NPC dialogue inside NARRATOR. Use the NPC's name as speaker.
@@ -160,6 +165,10 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
 
         if (call.function.name === "roll_dice") {
           toolStatus = "Rolling the 20-sided die...";
+        } else if (call.function.name === "set_ambience") {
+          toolStatus = "Tuning the table's atmosphere...";
+        } else if (call.function.name === "trigger_effect") {
+          toolStatus = "Conjuring stage effects...";
         } else if (call.function.name === "generate_image") {
           let isPortrait = false;
           try {

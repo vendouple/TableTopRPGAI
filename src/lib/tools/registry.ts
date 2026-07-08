@@ -1,10 +1,10 @@
-import { getCampaign, readCampaignTextFile, saveCampaign, writeCampaignTextFile, downloadAndSaveImage, logCampaignDebug, safePushDisplayEvent, isValidImageUrl } from "@/lib/campaign/store";
+import { getCampaign, readCampaignTextFile, saveCampaign, writeCampaignTextFile, downloadAndSaveImage, logCampaignDebug, safePushDisplayEvent, isValidImageUrl, pushStageEffect } from "@/lib/campaign/store";
 import { createId } from "@/lib/utils/ids";
 import { generateImage } from "@/lib/aqua/images";
 import { getCurrentDate } from "./date";
 import { rollD20Mode, rollDice } from "./dice";
 import type { AquaToolDefinition } from "@/lib/aqua/client";
-import { PlayerStat } from "@/lib/campaign/types";
+import { AmbienceMood, PlayerStat, StageEffectKind } from "@/lib/campaign/types";
 
 export const toolDefinitions: AquaToolDefinition[] = [
   {
@@ -185,6 +185,37 @@ export const toolDefinitions: AquaToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "set_ambience",
+      description: "Set the TV's living atmosphere: particle weather, color grade, fog, and music bias. Call this when the emotional register of the scene changes (entering combat, uncovering a mystery, victory, grief, safety). Use sparingly - once per meaningful shift, not every turn.",
+      parameters: {
+        type: "object",
+        required: ["mood"],
+        properties: {
+          mood: { type: "string", enum: ["calm", "tense", "battle", "mystery", "dread", "triumph", "wonder", "somber"], description: "Emotional register of the current scene." },
+          intensity: { type: "number", description: "0.0 to 1.0 - how hard the TV leans into the mood. Default 0.6." },
+          note: { type: "string", description: "Optional short sensory flavor, e.g. 'rain hammers the tin roof'. May be shown faintly on the TV." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "trigger_effect",
+      description: "Fire a one-shot cinematic effect on the TV for a dramatic beat: an explosion (shake+flash), a spell discharge (flash/embers), creeping dread (darkness/heartbeat), weather (rain/snow/fog). Use for punctuation on big moments only.",
+      parameters: {
+        type: "object",
+        required: ["kind"],
+        properties: {
+          kind: { type: "string", enum: ["shake", "flash", "embers", "fog", "rain", "snow", "darkness", "heartbeat"] },
+          strength: { type: "number", description: "0.0 to 1.0 impact strength. Default 0.6." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "generate_image",
       description: "Generate a cinematic scene background or a player portrait. Store scene images on the TV, or assign portraits to players.",
       parameters: {
@@ -233,6 +264,31 @@ export async function runTool(campaignId: string, name: string, rawArgs: string)
   }
 
   if (name === "get_date") return getCurrentDate();
+
+  if (name === "set_ambience") {
+    const moods: AmbienceMood[] = ["calm", "tense", "battle", "mystery", "dread", "triumph", "wonder", "somber"];
+    const mood = moods.includes(args.mood as AmbienceMood) ? (args.mood as AmbienceMood) : "calm";
+    const rawIntensity = Number(args.intensity ?? 0.6);
+    const campaign = await getCampaign(campaignId);
+    campaign.ambience = {
+      mood,
+      intensity: Number.isFinite(rawIntensity) ? Math.max(0, Math.min(1, rawIntensity)) : 0.6,
+      note: typeof args.note === "string" && args.note.trim() ? args.note.trim() : undefined,
+      updatedAt: new Date().toISOString()
+    };
+    await saveCampaign(campaign);
+    return { ok: true, mood, intensity: campaign.ambience.intensity };
+  }
+
+  if (name === "trigger_effect") {
+    const kinds: StageEffectKind[] = ["shake", "flash", "embers", "fog", "rain", "snow", "darkness", "heartbeat"];
+    const kind = kinds.includes(args.kind as StageEffectKind) ? (args.kind as StageEffectKind) : "embers";
+    const rawStrength = Number(args.strength ?? 0.6);
+    const campaign = await getCampaign(campaignId);
+    pushStageEffect(campaign, kind, Number.isFinite(rawStrength) ? rawStrength : 0.6);
+    await saveCampaign(campaign);
+    return { ok: true, kind };
+  }
 
   if (name === "read_campaign_file") {
     return { content: await readCampaignTextFile(campaignId, String(args.path)) };
