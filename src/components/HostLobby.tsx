@@ -5,13 +5,15 @@ import { QRCodeSVG } from "qrcode.react";
 import { api, accentColor, Campaign } from "@/lib/client/api";
 import { playSfx } from "@/lib/client/sfx";
 import CosmosCanvas from "@/components/three/CosmosCanvas";
+import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
 /**
  * The Gathering. The TV shows the table code like an inscription over a
  * summoning circle; as each phone joins, a hero card materializes with its
  * portrait being forged live by the Weaver.
  */
-export default function HostLobby({ campaign }: { campaign: Campaign }) {
+export default function HostLobby({ campaign, theme }: { campaign: Campaign; theme?: ThemeKey | string | null }) {
+  const visual = themeVisual(theme);
   const [joinUrl, setJoinUrl] = useState("");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -46,8 +48,8 @@ export default function HostLobby({ campaign }: { campaign: Campaign }) {
   };
 
   return (
-    <div className="lobby screen">
-      <CosmosCanvas drama={0.55 + Math.min(campaign.players.length * 0.08, 0.4)} />
+    <div className="lobby screen" data-music-theme={visual.key}>
+      <CosmosCanvas drama={0.55 + Math.min(campaign.players.length * 0.08, 0.4)} theme={visual.key} />
       <div className="portal-veil" />
 
       <header className="lobby-mast">
@@ -70,7 +72,7 @@ export default function HostLobby({ campaign }: { campaign: Campaign }) {
           </div>
           {joinUrl ? (
             <div className="join-qr">
-              <QRCodeSVG value={joinUrl} size={148} bgColor="transparent" fgColor="#e6c378" level="M" />
+              <QRCodeSVG value={joinUrl} size={148} bgColor="transparent" fgColor={visual.accentBright} level="M" />
             </div>
           ) : null}
           <span className="join-hint">Scan with a phone, or visit this address and enter the code.</span>

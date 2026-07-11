@@ -5,6 +5,7 @@ import { getCurrentDate } from "./date";
 import { rollD20Mode, rollDice } from "./dice";
 import type { AquaToolDefinition } from "@/lib/aqua/client";
 import { AmbienceMood, PlayerStat, StageEffectKind } from "@/lib/campaign/types";
+import { MUSIC_THEMES, MusicTheme } from "@/lib/campaign/musicTheme";
 
 export const toolDefinitions: AquaToolDefinition[] = [
   {
@@ -203,6 +204,20 @@ export const toolDefinitions: AquaToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "set_theme",
+      description: "Choose the campaign's musical score flavor. Call this EXACTLY ONCE, on the opening turn (the 'Start the couch campaign now.' beat), right after you know the world's genre. It fixes which background-music shelf plays for the whole saga — the atmosphere moods you set later (calm/tense/battle…) all draw from this shelf. Pick the theme that best fits the premise's genre and era. Do not call it again on later turns unless the genre fundamentally transforms.",
+      parameters: {
+        type: "object",
+        required: ["theme"],
+        properties: {
+          theme: { type: "string", enum: [...MUSIC_THEMES], description: "The score flavor. fantasy = swords/magic/medieval; scifi = space/cyberpunk/futuristic; horror = dread/undead/eldritch; noir = detective/1930s-40s/hardboiled; modern = spy/thriller/heist/present-day; western = frontier/cowboys/wild west. Choose the closest fit for the campaign's genre." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "trigger_effect",
       description: "Fire a one-shot cinematic effect on the TV for a dramatic beat: an explosion (shake+flash), a spell discharge (flash/embers), creeping dread (darkness/heartbeat), weather (rain/snow/fog). Use for punctuation on big moments only.",
       parameters: {
@@ -294,6 +309,15 @@ export async function runTool(campaignId: string, name: string, rawArgs: string)
     };
     await saveCampaign(campaign);
     return { ok: true, mood, intensity: campaign.ambience.intensity };
+  }
+
+  if (name === "set_theme") {
+    const theme = MUSIC_THEMES.includes(args.theme as MusicTheme) ? (args.theme as MusicTheme) : null;
+    if (!theme) return { error: `Unknown theme '${String(args.theme)}'. Pick one of: ${MUSIC_THEMES.join(", ")}.` };
+    const campaign = await getCampaign(campaignId);
+    campaign.musicTheme = theme;
+    await saveCampaign(campaign);
+    return { ok: true, theme };
   }
 
   if (name === "trigger_effect") {

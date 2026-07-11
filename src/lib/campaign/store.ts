@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile, appendFile, rm } from "fs/promises
 import path from "path";
 import { Ambience, AmbienceMood, Campaign, CampaignSummary, CampaignType, ChatMessage, DisplayEvent, Player, StageEffect, StageEffectKind, StoryCharacter, SuggestedAction } from "./types";
 import { createId, createJoinCode } from "@/lib/utils/ids";
-import { classifyMusicTheme } from "./musicTheme";
+import { classifyMusicTheme, MUSIC_THEMES, MusicTheme } from "./musicTheme";
 
 const dataRoot = path.join(process.cwd(), "data", "campaigns");
 
@@ -313,6 +313,7 @@ function normalizeCampaign(raw: Partial<Campaign> & { suggestedActions?: unknown
     dmPhase: raw.dmPhase && typeof raw.dmPhase === "string" ? raw.dmPhase : undefined,
     messages: Array.isArray(raw.messages) ? raw.messages : [],
     campaignType: normalizeCampaignType(raw),
+    musicTheme: MUSIC_THEMES.includes(raw.musicTheme as MusicTheme) ? raw.musicTheme : undefined,
     isRandomized: !!raw.isRandomized,
     campaignLength: raw.campaignLength || "auto",
     rulesMode: raw.rulesMode === "full" ? "full" : "casual",

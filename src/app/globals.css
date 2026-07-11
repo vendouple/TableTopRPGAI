@@ -60,6 +60,56 @@
   --hairline-strong: rgba(95, 168, 201, 0.55);
 }
 
+/* --------------------------------------------------------------------------
+   Campaign theme skins — data-music-theme on the host screens (lobby,
+   weaving, stage) re-tints the whole grimoire to the campaign's genre.
+   Guarded by :root:not([data-accent]) so a table accent the host picked by
+   hand in the director's drawer still outranks the automatic theme skin.
+   Palettes mirror src/components/three/themeVisuals.ts.
+   -------------------------------------------------------------------------- */
+:root:not([data-accent]) .screen[data-music-theme="fantasy"] {
+  --gold: #e0b25f;
+  --gold-bright: #ffe2a1;
+  --arcane: #8d7fff;
+  --hairline: rgba(224, 178, 95, 0.3);
+  --hairline-strong: rgba(224, 178, 95, 0.58);
+}
+:root:not([data-accent]) .screen[data-music-theme="scifi"] {
+  --gold: #4fd8ff;
+  --gold-bright: #a8ecff;
+  --arcane: #ff4fa8;
+  --hairline: rgba(79, 216, 255, 0.28);
+  --hairline-strong: rgba(79, 216, 255, 0.55);
+}
+:root:not([data-accent]) .screen[data-music-theme="horror"] {
+  --gold: #9fb86a;
+  --gold-bright: #c9dd8f;
+  --arcane: #b3202a;
+  --hairline: rgba(159, 184, 106, 0.26);
+  --hairline-strong: rgba(159, 184, 106, 0.5);
+}
+:root:not([data-accent]) .screen[data-music-theme="noir"] {
+  --gold: #d9c69a;
+  --gold-bright: #f2e3bb;
+  --arcane: #5f7285;
+  --hairline: rgba(217, 198, 154, 0.24);
+  --hairline-strong: rgba(217, 198, 154, 0.48);
+}
+:root:not([data-accent]) .screen[data-music-theme="modern"] {
+  --gold: #4fe0c4;
+  --gold-bright: #9df2e1;
+  --arcane: #ff9a3c;
+  --hairline: rgba(79, 224, 196, 0.26);
+  --hairline-strong: rgba(79, 224, 196, 0.52);
+}
+:root:not([data-accent]) .screen[data-music-theme="western"] {
+  --gold: #ffb35c;
+  --gold-bright: #ffd9a0;
+  --arcane: #c4573a;
+  --hairline: rgba(255, 179, 92, 0.28);
+  --hairline-strong: rgba(255, 179, 92, 0.55);
+}
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -856,10 +906,10 @@ button:disabled { cursor: default; opacity: 0.45; }
   background: transparent;
   transition: all 0.5s;
 }
-.weave-node.done .weave-star { background: var(--gold); box-shadow: 0 0 12px rgba(230, 195, 120, 0.7); }
+.weave-node.done .weave-star { background: var(--gold); box-shadow: 0 0 12px color-mix(in srgb, var(--gold-bright) 70%, transparent); }
 .weave-node.active .weave-star {
   background: var(--gold-bright);
-  box-shadow: 0 0 20px rgba(230, 195, 120, 1);
+  box-shadow: 0 0 20px var(--gold-bright);
   animation: forge-pulse 1.2s ease-in-out infinite;
 }
 .weave-label {

@@ -3,8 +3,8 @@ import { getCampaign, saveCampaign, downloadAndSaveImage, logCampaignDebug, safe
 import { createId } from "@/lib/utils/ids";
 import { aquaConfig, aquaFetch, AquaMessage, AquaToolCall } from "./client";
 import { runTool, toolDefinitions } from "@/lib/tools/registry";
-import { PlayerStat } from "@/lib/campaign/types";
-import { classifyMusicTheme } from "@/lib/campaign/musicTheme";
+import { Campaign, PlayerStat } from "@/lib/campaign/types";
+import { classifyMusicTheme, MUSIC_THEMES, MusicTheme } from "@/lib/campaign/musicTheme";
 
 export function serverLog(category: string, message: string, data?: any) {
   const timestamp = new Date().toLocaleTimeString();
@@ -48,6 +48,7 @@ Continuity & assets:
 - Maintain quest_log.md with ONLY the current active objective and immediate tasks.
 
 Cinematic direction (you are also the stage director):
+- If (and only if) the set_theme tool is offered to you, no score has been chosen yet (a sealed-envelope campaign) — on the opening turn, once you know the world's genre, call set_theme EXACTLY ONCE to choose the campaign's musical score (fantasy/scifi/horror/noir/modern/western). This fixes the background music for the whole saga. When the tool is absent, the score is already set — leave it alone.
 - Call set_ambience when the emotional register shifts (combat begins, a mystery deepens, the party reaches safety, a tragedy lands). One call per shift, not per turn.
 - Call trigger_effect to punctuate big single beats: explosions (shake+flash), spellbursts (embers), horror stings (darkness/heartbeat), storms (rain/fog).
 - Prefer atmosphere over words: a mood change plus one tight paragraph beats three paragraphs.
@@ -147,11 +148,14 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
 
     let finalMessage: AquaMessage | null = null;
     const toolEvents: string[] = [];
+    // Once the score is chosen (now or on a past turn), drop set_theme from
+    // the offered tools so it can't be picked again mid-turn.
+    let themeChosen = !!campaign.musicTheme;
 
     for (let step = 0; step < 8; step += 1) {
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Requesting completion...`);
       serverLog("DM AI Step", `Step ${step + 1}/8: Requesting completion...`);
-      const response = await complete(messages);
+      const response = await complete(messages, "auto", toolsForTurn({ musicTheme: themeChosen ? "set" : undefined }));
       const message = response.choices?.[0]?.message || response.message;
       if (!message) throw new Error("Aqua chat response did not include a message");
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Received response: ${JSON.stringify(message)}`);
@@ -177,6 +181,8 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
 
         if (call.function.name === "roll_dice") {
           toolStatus = "Rolling the 20-sided die...";
+        } else if (call.function.name === "set_theme") {
+          toolStatus = "Choosing the campaign's score...";
         } else if (call.function.name === "set_ambience") {
           toolStatus = "Tuning the table's atmosphere...";
         } else if (call.function.name === "trigger_effect") {
@@ -254,6 +260,7 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
         await logCampaignDebug(campaignId, `[Tool Call] Executing ${call.function.name} with args: ${call.function.arguments}`);
         serverLog("DM Tool Call", `Executing '${call.function.name}' with arguments: ${call.function.arguments}`);
         const result = await runTool(campaignId, call.function.name, call.function.arguments);
+        if (call.function.name === "set_theme" && result && !(result as any).error) themeChosen = true;
         const resultText = JSON.stringify(result);
         await logCampaignDebug(campaignId, `[Tool Result] ${call.function.name} returned: ${resultText}`);
         serverLog("DM Tool Result", `Tool '${call.function.name}' returned: ${resultText.slice(0, 160)}${resultText.length > 160 ? "..." : ""}`);
@@ -580,17 +587,107 @@ function stripSuggestedActions(content: string) {
   return content.replace(/\n?\*\*Suggested Actions:\*\*[\s\S]*$/i, "").trim();
 }
 
-async function complete(messages: AquaMessage[], toolChoice: "auto" | "none" = "auto") {
+async function complete(
+  messages: AquaMessage[],
+  toolChoice: "auto" | "none" = "auto",
+  tools: typeof toolDefinitions = toolDefinitions
+) {
   const config = aquaConfig();
   return (await aquaFetch("/chat/completions", {
     method: "POST",
     body: JSON.stringify({
       model: config.chatModel,
       messages,
-      tools: toolDefinitions,
+      tools,
       tool_choice: toolChoice
     })
   })) as ChatCompletionResponse;
+}
+
+/**
+ * The tools the DM may use this turn. We prune tools whose job is already
+ * done so the model isn't tempted to re-run them: once the score is chosen,
+ * set_theme vanishes (a mid-saga music swap just confuses the table).
+ */
+function toolsForTurn(campaign: { musicTheme?: string }): typeof toolDefinitions {
+  return toolDefinitions.filter((tool) => {
+    if (tool.function.name === "set_theme") return !campaign.musicTheme;
+    return true;
+  });
+}
+
+/**
+ * Ask the AI to choose the campaign's musical score by forcing the set_theme
+ * tool call. Returns the chosen theme, or null if the premise is too thin or
+ * the model answers with something off-list. This is a standalone judgement
+ * call — it does NOT run the tool (no DM turn, no side effects); the caller
+ * decides what to do with the answer.
+ */
+async function pickMusicThemeViaTool(campaign: Campaign): Promise<MusicTheme | null> {
+  const setThemeTool = toolDefinitions.find((tool) => tool.function.name === "set_theme");
+  if (!setThemeTool) return null;
+
+  const cast = (campaign.storyCharacters || [])
+    .map((npc) => `${npc.name}: ${npc.description}`)
+    .filter((line) => line.trim() && line.trim() !== ":")
+    .join("\n");
+  const premise = [
+    campaign.title ? `Title: ${campaign.title}` : "",
+    campaign.startingStory ? `Premise: ${campaign.startingStory}` : "",
+    cast ? `Cast:\n${cast}` : ""
+  ].filter(Boolean).join("\n\n");
+  if (!premise.trim()) return null;
+
+  const config = aquaConfig();
+  const response = (await aquaFetch("/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({
+      model: config.chatModel,
+      messages: [
+        {
+          role: "system",
+          content: "You are the score supervisor for a couch RPG. Read the campaign premise and call set_theme EXACTLY ONCE with the single best-fitting musical theme for its genre and era. Always pick the closest match, even if the fit is imperfect."
+        },
+        { role: "user", content: premise }
+      ],
+      tools: [setThemeTool],
+      tool_choice: { type: "function", function: { name: "set_theme" } }
+    })
+  })) as ChatCompletionResponse;
+
+  const message = response.choices?.[0]?.message || response.message;
+  const call = Array.isArray(message?.tool_calls) ? message?.tool_calls?.[0] : null;
+  if (!call?.function?.arguments) return null;
+  try {
+    const args = JSON.parse(call.function.arguments) as { theme?: string };
+    return MUSIC_THEMES.includes(args.theme as MusicTheme) ? (args.theme as MusicTheme) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Choose and persist a campaign's music theme at CREATION time, before the
+ * lobby opens, so the lobby's own music already plays on the right shelf. The
+ * AI picks via set_theme; on any failure we keep whatever the keyword
+ * classifier already seeded. Sealed-envelope campaigns have no premise yet, so
+ * they stay unthemed here and get scored on the DM's opening turn instead.
+ * Returns the latest campaign (with the theme applied when one was chosen).
+ */
+export async function chooseCampaignTheme(campaignId: string): Promise<Campaign> {
+  const campaign = await getCampaign(campaignId);
+  try {
+    if (campaign.isRandomized) return campaign;
+    const theme = await pickMusicThemeViaTool(campaign);
+    if (theme && theme !== campaign.musicTheme) {
+      campaign.musicTheme = theme;
+      await saveCampaign(campaign);
+      serverLog("Theme", `AI chose music theme "${theme}" for campaign ${campaignId}`);
+    }
+  } catch (err) {
+    serverError("Theme", "AI theme selection failed; keeping keyword-classified theme", err);
+  }
+  return campaign;
 }
 
 async function parseFinalJson(campaignId: string, content: string) {

@@ -3,6 +3,12 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { bgmGetAnalyser } from "@/lib/client/audio";
+import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
+
+function hexToRgba(hex: string, alpha: number) {
+  const color = new THREE.Color(hex);
+  return `rgba(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)},${alpha})`;
+}
 
 /** Soft radial glow sprite texture. */
 function makeGlowTexture(inner: string, outer: string) {
@@ -18,17 +24,18 @@ function makeGlowTexture(inner: string, outer: string) {
   return new THREE.CanvasTexture(canvas);
 }
 
-/** Ring of faint glyphs — drawn once onto a canvas, worn by the great rings. */
-function makeRuneRingTexture(accent: string) {
+/** Ring of faint glyphs — drawn once onto a canvas, worn by the great rings.
+ *  The alphabet is the theme's: runes for fantasy, hex code for scifi,
+ *  occult marks for horror, typewriter punctuation for noir… */
+function makeRuneRingTexture(accent: string, glyphs: string, font: string) {
   const size = 1024;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d")!;
   ctx.translate(size / 2, size / 2);
-  const glyphs = "ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒᛖᛗᛚᛜᛞᛟ";
   const count = 36;
-  ctx.font = "44px serif";
+  ctx.font = font;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (let i = 0; i < count; i += 1) {
@@ -55,9 +62,19 @@ const easeOutCubic = (x: number) => 1 - Math.pow(1 - Math.max(0, Math.min(1, x))
  * luminous threads from the outer dark and lock into a forming planet, while
  * rune-etched rings precess around it. `progress` (0..1, from the dmPhase
  * timeline) drives how complete the world is; the whole scene breathes with
- * the score via the shared BGM analyser.
+ * the score via the shared BGM analyser. The campaign's theme recolors the
+ * whole loom — palette, glyph rings, molten heart — so a noir case file and
+ * a fantasy realm are woven from visibly different cloth.
  */
-export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { progress?: number; accent?: string }) {
+export default function WeavingLoom({
+  progress = 0.2,
+  accent,
+  theme = "none"
+}: {
+  progress?: number;
+  accent?: string;
+  theme?: ThemeKey | string | null;
+}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef(progress);
   progressRef.current = progress;
@@ -66,6 +83,8 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
     const mount = mountRef.current;
     if (!mount) return;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const visual = themeVisual(theme);
+    const accentHex = accent || visual.accent;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
@@ -73,13 +92,13 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x04060c, 0.03);
+    scene.fog = new THREE.FogExp2(new THREE.Color(visual.fog), 0.03);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
     camera.position.set(0, 1.2, 14);
 
-    const accentColor = new THREE.Color(accent);
-    const arcane = new THREE.Color("#7b6cff");
+    const accentColor = new THREE.Color(accentHex);
+    const arcane = new THREE.Color(visual.secondary);
 
     scene.add(new THREE.AmbientLight(0x222a44, 1.4));
     const coreLight = new THREE.PointLight(accentColor, 30, 60, 1.8);
@@ -131,7 +150,7 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
     // The crystallized world beneath the motes, fading in as it completes.
     const worldGeometry = new THREE.IcosahedronGeometry(WORLD_RADIUS * 0.985, 2);
     const worldMaterial = new THREE.MeshStandardMaterial({
-      color: 0x0b1020,
+      color: new THREE.Color(visual.loom.world),
       roughness: 0.4,
       metalness: 0.7,
       flatShading: true,
@@ -146,8 +165,8 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
     world.add(worldWire);
     disposables.push(worldGeometry, worldMaterial, worldWireGeometry, worldWireMaterial);
 
-    // Molten heart glow behind everything.
-    const heartTexture = makeGlowTexture("rgba(230,195,120,0.85)", "rgba(230,195,120,0)");
+    // Molten heart glow behind everything, in the theme's fire.
+    const heartTexture = makeGlowTexture(`rgba(${visual.loom.heart},0.85)`, `rgba(${visual.loom.heart},0)`);
     const heartMaterial = new THREE.SpriteMaterial({ map: heartTexture, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
     const heart = new THREE.Sprite(heartMaterial);
     heart.scale.setScalar(7);
@@ -186,8 +205,8 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
       disposables.push(geometry);
     }
 
-    /* -- rune rings ---------------------------------------------------------- */
-    const runeTexture = makeRuneRingTexture(accent);
+    /* -- glyph rings ---------------------------------------------------------- */
+    const runeTexture = makeRuneRingTexture(accentHex, visual.glyphs, visual.glyphFont);
     const rings: Array<{ mesh: THREE.Mesh; spin: number }> = [];
     const ringSpecs: Array<[number, number, number]> = [
       [4.4, 0.42, 0.012],
@@ -229,8 +248,8 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
     disposables.push(starGeometry, starMaterial);
 
     const nebulaTextures = [
-      makeGlowTexture("rgba(123,108,255,0.28)", "rgba(123,108,255,0)"),
-      makeGlowTexture("rgba(201,163,92,0.2)", "rgba(201,163,92,0)")
+      makeGlowTexture(hexToRgba(visual.nebulae[0], 0.28), hexToRgba(visual.nebulae[0], 0)),
+      makeGlowTexture(hexToRgba(visual.nebulae[1], 0.2), hexToRgba(visual.nebulae[1], 0))
     ];
     const nebulae: THREE.Sprite[] = [];
     [[-14, 7, -26, 30], [13, -6, -30, 36]].forEach(([x, y, z, size], index) => {
@@ -321,7 +340,7 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
       // The solid world crystallizes late so motes get their moment.
       const solidity = easeOutCubic((smoothProgress - 0.45) / 0.55);
       worldMaterial.opacity = solidity * 0.92;
-      worldWireMaterial.opacity = 0.12 + solidity * 0.6 + musicLevel * 0.25;
+      worldWireMaterial.opacity = Math.min(1, (0.12 + solidity * 0.6 + musicLevel * 0.25) * visual.loom.wireBoost);
       world.rotation.y = t * 0.07;
       world.rotation.x = Math.sin(t * 0.11) * 0.08;
       world.scale.setScalar(pulse);
@@ -383,7 +402,7 @@ export default function WeavingLoom({ progress = 0.2, accent = "#c9a35c" }: { pr
       for (const item of disposables) item.dispose();
       if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
     };
-  }, [accent]);
+  }, [accent, theme]);
 
   return <div ref={mountRef} className="cosmos-canvas" aria-hidden />;
 }

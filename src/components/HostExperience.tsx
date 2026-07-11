@@ -57,7 +57,7 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
   if (campaign.status === "lobby") {
     return (
       <>
-        <HostLobby campaign={campaign} />
+        <HostLobby campaign={campaign} theme={musicTheme} />
         <MusicWidget />
       </>
     );
@@ -70,6 +70,7 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
           phase={campaign.dmPhase}
           status={campaign.dmStatus}
           title={campaign.isRandomized && !storyStarted ? "Breaking the seal…" : campaign.title}
+          theme={musicTheme}
         />
         <MusicWidget />
       </>
@@ -78,7 +79,7 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
 
   return (
     <>
-      <HostStage campaign={campaign} onExit={onExit} />
+      <HostStage campaign={campaign} onExit={onExit} theme={musicTheme} />
       <MusicWidget />
     </>
   );

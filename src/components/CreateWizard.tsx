@@ -53,13 +53,17 @@ export default function CreateWizard({
 
   const generatePremise = () =>
     oracle("premise", async () => {
+      const trimmedTitle = title.trim();
       const { result } = await api.generate({
         type: "campaign",
         prompt: story.trim() || undefined,
+        title: trimmedTitle || undefined,
         campaignType,
         rulesMode
       });
-      setTitle(String(result.title || ""));
+      // A title the user typed is theirs to keep — the Oracle only names the
+      // tale when the field was left blank. The story is always (re)written.
+      setTitle(trimmedTitle || String(result.title || ""));
       setStory(String(result.startingStory || ""));
     });
 

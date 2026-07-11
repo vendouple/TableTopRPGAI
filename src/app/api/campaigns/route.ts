@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createCampaign, listCampaigns } from "@/lib/campaign/store";
-import { serverLog, serverError } from "@/lib/aqua/chat";
+import { chooseCampaignTheme, serverLog, serverError } from "@/lib/aqua/chat";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     serverLog("API campaigns", `Creating campaign: '${title}' | type: ${campaignType} | randomized: ${randomized} | length: ${length}`);
     
     const rulesMode = campaignType === "dnd" && body.rulesMode === "full" ? "full" : "casual";
-    const campaign = await createCampaign(
+    const created = await createCampaign(
       title,
       String(body.startingStory || body.premise || ""),
       Array.isArray(body.storyCharacters) ? body.storyCharacters : [],
@@ -27,8 +27,12 @@ export async function POST(request: Request) {
       rulesMode,
       campaignType
     );
-    
-    serverLog("API campaigns", `Successfully created campaign ID: ${campaign.id} | Code: ${campaign.joinCode}`);
+
+    // Let the AI pick the score before we hand back the campaign, so the lobby
+    // music is already on the right shelf when the table lights up.
+    const campaign = await chooseCampaignTheme(created.id);
+
+    serverLog("API campaigns", `Successfully created campaign ID: ${campaign.id} | Code: ${campaign.joinCode} | theme: ${campaign.musicTheme || "none"}`);
     return NextResponse.json({ campaign });
   } catch (error) {
     serverError("API campaigns", "Failed to create campaign", error);

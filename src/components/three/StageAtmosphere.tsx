@@ -3,6 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import type { AmbienceMood, StageEffectKind } from "@/lib/campaign/types";
+import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
 export type AtmosphereHandle = {
   /** Fire a one-shot particle surge (embers burst, rain squall, fog roll…). */
@@ -80,8 +81,8 @@ function makeFogTexture() {
  * set_ambience tool, plus one-shot squalls from trigger_effect. Rendered
  * transparently above the painted scene backdrop.
  */
-const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; intensity: number }>(
-  function StageAtmosphere({ mood, intensity }, handle) {
+const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; intensity: number; theme?: ThemeKey | string | null }>(
+  function StageAtmosphere({ mood, intensity, theme }, handle) {
     const mountRef = useRef<HTMLDivElement>(null);
     const moodRef = useRef<{ mood: AmbienceMood; intensity: number }>({ mood, intensity });
     moodRef.current = { mood, intensity };
@@ -173,11 +174,18 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
       const colorB = new THREE.Color();
       const mixed = new THREE.Color();
       const fogColor = new THREE.Color();
+      // The campaign theme leans every mood toward its palette — a "tense"
+      // scene glows steel-blue in noir but sickly green in horror.
+      const visual = themeVisual(theme);
+      const themeTintA = new THREE.Color(visual.accent);
+      const themeTintB = new THREE.Color(visual.secondary);
+      const themeFog = new THREE.Color(visual.fog);
+      const tint = visual.key === "none" ? 0 : 0.28;
 
       const applyMoodColors = () => {
         const recipe = MOODS[moodRef.current.mood] || MOODS.calm;
-        colorA.set(recipe.colors[0]);
-        colorB.set(recipe.colors[1]);
+        colorA.set(recipe.colors[0]).lerp(themeTintA, tint);
+        colorB.set(recipe.colors[1]).lerp(themeTintB, tint);
         for (let i = 0; i < MAX_PARTICLES; i += 1) {
           mixed.copy(colorA).lerp(colorB, (i % 7) / 6);
           colors[i * 3] = mixed.r;
@@ -185,7 +193,7 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
           colors[i * 3 + 2] = mixed.b;
         }
         geometry.attributes.color.needsUpdate = true;
-        fogColor.set(recipe.fogColor);
+        fogColor.set(recipe.fogColor).lerp(themeFog, tint * 0.7);
         for (const sheet of fogSheets) {
           (sheet.material as THREE.MeshBasicMaterial).color.copy(fogColor);
         }
@@ -301,7 +309,7 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
         }
         if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
       };
-    }, []);
+    }, [theme]);
 
     return <div ref={mountRef} className="atmosphere-canvas" aria-hidden />;
   }

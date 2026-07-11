@@ -9,6 +9,7 @@ import { parseInline, plainText, renderInline, renderTokens } from "@/lib/client
 import { ACCENT_THEMES, applyAccent, currentAccent, initAccent } from "@/lib/client/theme";
 import StageAtmosphere, { AtmosphereHandle } from "@/components/three/StageAtmosphere";
 import DiceTheater, { DiceRollData } from "@/components/three/DiceTheater";
+import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
 const MOOD_GRADES: Record<string, string> = {
   calm: "linear-gradient(180deg, rgba(30,24,10,0.12), rgba(5,7,13,0.55))",
@@ -38,7 +39,16 @@ function beatHold(plain: string) {
  * that performs story beats one at a time, hero rails, dice cinematics, and
  * a hidden director's drawer for the human host.
  */
-export default function HostStage({ campaign, onExit }: { campaign: Campaign; onExit: () => void }) {
+export default function HostStage({
+  campaign,
+  onExit,
+  theme
+}: {
+  campaign: Campaign;
+  onExit: () => void;
+  theme?: ThemeKey | string | null;
+}) {
+  const visual = themeVisual(theme);
   /* ------------------------------------------------------------------ */
   /* Backdrop crossfade                                                  */
   /* ------------------------------------------------------------------ */
@@ -339,7 +349,11 @@ export default function HostStage({ campaign, onExit }: { campaign: Campaign; on
   const pulsing = pulseUntil > now;
 
   return (
-    <div className={`stage screen ${shaking ? "stage-shake" : ""} ${pulsing ? "stage-pulse" : ""}`} onClick={skip}>
+    <div
+      className={`stage screen ${shaking ? "stage-shake" : ""} ${pulsing ? "stage-pulse" : ""}`}
+      data-music-theme={visual.key}
+      onClick={skip}
+    >
       {/* Painted backdrop with Ken Burns crossfade */}
       <div className="stage-backdrop">
         {layers.map((layer, index) => (
@@ -354,7 +368,7 @@ export default function HostStage({ campaign, onExit }: { campaign: Campaign; on
         <div className="stage-grade" style={{ background: MOOD_GRADES[mood] || MOOD_GRADES.calm }} />
       </div>
 
-      <StageAtmosphere ref={atmosphereRef} mood={mood} intensity={intensity} />
+      <StageAtmosphere ref={atmosphereRef} mood={mood} intensity={intensity} theme={visual.key} />
 
       <div className="stage-grain" aria-hidden />
       <div className={`stage-darkness ${dark ? "on" : ""}`} aria-hidden />
