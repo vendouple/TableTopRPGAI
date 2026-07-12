@@ -25,6 +25,9 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
   // mood-matched stage score, crossfading at each transition.
   const mood = campaign?.ambience?.mood;
   const status = campaign?.status;
+  // When the saga has ended, the outro score is tailored to HOW it ended
+  // (victory vs defeat vs cliffhanger…) via BGM/outro-<kind>/<genre>/.
+  const endingKind = campaign?.ending?.kind;
   // The campaign's genre theme (fantasy/scifi/modern/…) chosen at start; it
   // biases the score toward BGM/<mood>/<theme>/ shelves, falling back to the
   // neutral mood roots when that themed shelf is empty. D&D always reads as
@@ -36,10 +39,10 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
   useEffect(() => {
     if (!status) return;
     if (status === "lobby") bgmSetContext("lobby");
-    else if (status === "completed") bgmSetContext(mood || "outro");
+    else if (status === "completed") bgmSetContext(endingKind ? `outro-${endingKind}` : "outro");
     else if (!storyStarted) bgmSetContext("weaving");
     else bgmSetContext(mood || "calm");
-  }, [status, storyStarted, mood]);
+  }, [status, storyStarted, mood, endingKind]);
   useEffect(() => () => bgmStop(), []);
 
   if (!campaign) {

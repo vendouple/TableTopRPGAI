@@ -19,7 +19,13 @@ public/music/BGM/
   triumph/   ← DM mood: victory, celebration
   wonder/    ← DM mood: awe, vistas, magic revealed
   somber/    ← DM mood: loss, mourning, quiet aftermath
-  outro/     ← end credits: the cinematic outro after end_campaign
+  outro/               ← generic end credits (fallback for any ending)
+  outro-victory/       ← end credits: the party WON
+  outro-defeat/        ← end credits: the party lost / died / failed
+  outro-bittersweet/   ← end credits: mixed — gains paid for in losses
+  outro-escape/        ← end credits: survived by fleeing, threat remains
+  outro-draw/          ← end credits: stalemate, neither side prevailed
+  outro-cliffhanger/   ← end credits: deliberately unresolved, "to be continued"
 ```
 
 The AI Dungeon Master sets an ambience mood as the story shifts; the host
@@ -243,29 +249,75 @@ below the moods.
 > grey light, dignified grief, long silences between phrases, funeral for
 > a hero, quiet and restrained, instrumental
 
-### `outro/` — the end credits
+### `outro-<state>/` — the end credits, tailored to the ending
 
 Plays when the AI calls `end_campaign` and the Three.js outro takes the TV.
-One shelf covers **every ending kind** — victory, defeat, bittersweet,
-escape, draw, and cliffhanger — so aim for *reflective end-credits* music:
-grand and warm but never gloating, tender but never funereal. Think "the
-book closes and the table sits back," not "we won." It loops under the
-credits until the host leaves the table, so the usual no-intro/no-outro
-rule still applies.
+The **kind** of ending now picks the shelf, so a triumphant win and a
+total-party-wipe no longer share a cue. The host resolves
+`outro-<kind>` → generic `outro` → the nearest existing mood, so every
+folder is optional: an unfilled `outro-defeat/` still lands on `somber`
+music you already have. Fill the ones you care about first.
 
-**Neutral:**
+Each shelf takes genre subfolders exactly like the moods do
+(`outro-victory/fantasy/`, `outro-defeat/scifi/`, …), preferred when the
+campaign's theme matches. All loop under the credits until the host leaves,
+so keep the no-intro/no-outro/no-silent-tail rule.
+
+Fallbacks per ending (most-specific first):
+| Shelf | Falls back to |
+| --- | --- |
+| `outro-victory` | `outro → triumph → wonder → main` |
+| `outro-defeat` | `outro → somber → dread → main` |
+| `outro-bittersweet` | `outro → somber → calm → triumph → main` |
+| `outro-escape` | `outro → tense → triumph → main` |
+| `outro-draw` | `outro → somber → calm → main` |
+| `outro-cliffhanger` | `outro → mystery → dread → tense → main` |
+
+**Generic `outro/`** (the catch-all when a state shelf is empty):
 > Cinematic end-credits theme, warm strings and reflective piano over a
 > slow noble pulse, equal parts gratitude and farewell, grand but tender,
 > gentle swells that resolve and return, works over victory or loss alike,
 > seamless loop feel, no big intro or outro, no fade to silence,
 > instrumental
 
-**Fantasy** (`outro/fantasy/`):
-> Fantasy end-credits suite, noble horns and warm strings with harp
-> arpeggios, a reflective folk melody passed between flute and fiddle,
-> farewell to fellow travelers at the road's end, grand but tender, gentle
-> swells that resolve and return, seamless loop feel, no fade to silence,
-> instrumental
+Neutral (any-genre) prompts for each ending state — drop these in the shelf
+root (`outro-victory/`, etc.); add `outro-<state>/<genre>/` variants later:
+
+**`outro-victory/`** — the party won:
+> Triumphant end-credits theme, soaring strings and noble brass over a warm
+> major-key pulse, bright harp and choir swells, earned jubilation and
+> gratitude, heroic but not gloating, seamless loop feel, no big intro or
+> outro, no fade to silence, instrumental
+
+**`outro-defeat/`** — the party lost, died, or failed:
+> Mournful end-credits elegy, solo cello and sparse piano over a low dark
+> drone, distant muted horn, dignified grief and finality, the cost of
+> failure, slow and restrained but not hopeless, seamless loop feel, no big
+> intro or outro, no fade to silence, instrumental
+
+**`outro-bittersweet/`** — a mixed ending, gains paid for in losses:
+> Bittersweet end-credits theme, warm strings and reflective piano with a
+> single wistful solo instrument, a major melody shadowed by minor
+> harmony, gratitude and grief entwined, tender and resolved but aching,
+> seamless loop feel, no big intro or outro, no fade to silence, instrumental
+
+**`outro-escape/`** — survived by fleeing, the threat remains:
+> Tense-relief end-credits theme, breathless strings settling over a steady
+> pulse, a cautious hopeful lead that keeps glancing over its shoulder,
+> survival without safety, restless resolve, seamless loop feel, no big
+> intro or outro, no fade to silence, instrumental
+
+**`outro-draw/`** — a stalemate, neither side prevailed:
+> Ambivalent end-credits theme, muted strings and piano circling an
+> unresolved cadence, a weary truce, neither victory nor defeat, quiet and
+> contemplative, gentle swells that never quite land, seamless loop feel, no
+> big intro or outro, no fade to silence, instrumental
+
+**`outro-cliffhanger/`** — deliberately unresolved, "to be continued":
+> Ominous cliffhanger end-credits theme, a curious unresolved motif over
+> pulsing low synth and ticking percussion, mystery and anticipation, one
+> last question hanging in the dark, tension that promises more, seamless
+> loop feel, no big intro or outro, no fade to silence, instrumental
 
 ## Other genre themes
 

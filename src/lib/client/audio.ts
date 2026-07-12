@@ -1,6 +1,6 @@
 "use client";
 
-import type { AmbienceMood } from "@/lib/campaign/types";
+import type { AmbienceMood, EndingKind } from "@/lib/campaign/types";
 
 /**
  * The table's bard: a singleton background-music engine shared by the host
@@ -9,7 +9,10 @@ import type { AmbienceMood } from "@/lib/campaign/types";
  * crossfades whenever the DM's ambience mood asks for a different shelf.
  */
 
-export type BgmContext = "lobby" | "weaving" | AmbienceMood;
+/** Per-ending outro shelves, e.g. "outro-victory" → BGM/outro-victory/<genre>/. */
+export type OutroContext = `outro-${EndingKind}`;
+
+export type BgmContext = "lobby" | "weaving" | AmbienceMood | OutroContext;
 
 type MusicLibrary = {
   tracks: string[];
@@ -29,7 +32,18 @@ const CONTEXT_FALLBACKS: Record<string, string[]> = {
   dread:   ["dread", "somber", "mystery", "main", "any"],
   triumph: ["triumph", "calm", "main", "any"],
   somber:  ["somber", "dread", "calm", "main", "any"],
-  outro:   ["outro", "triumph", "somber", "main", "any"]
+  // Generic outro (used when the ending kind is unknown).
+  outro:   ["outro", "triumph", "somber", "main", "any"],
+  // Per-ending outros. Each prefers its own shelf, then the generic outro,
+  // then the nearest existing mood — so an unfilled outro-<state>/ folder
+  // still lands on tonally-right music you already have (win→triumph,
+  // loss→somber, unresolved→mystery/dread) instead of falling silent.
+  "outro-victory":     ["outro-victory", "outro", "triumph", "wonder", "main", "any"],
+  "outro-defeat":      ["outro-defeat", "outro", "somber", "dread", "main", "any"],
+  "outro-bittersweet": ["outro-bittersweet", "outro", "somber", "calm", "triumph", "main", "any"],
+  "outro-escape":      ["outro-escape", "outro", "tense", "triumph", "main", "any"],
+  "outro-draw":        ["outro-draw", "outro", "somber", "calm", "main", "any"],
+  "outro-cliffhanger": ["outro-cliffhanger", "outro", "mystery", "dread", "tense", "main", "any"]
 };
 
 const BASE_VOLUME = 0.32;
