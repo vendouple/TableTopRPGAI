@@ -12,6 +12,9 @@ export function buildCampaignContext(campaign: Campaign) {
     characterName: player.characterName,
     background: player.background,
     status: player.status,
+    canAct: player.canAct,
+    conditions: player.conditions,
+    away: player.away,
     portraitUrl: player.portraitUrl,
     isPartyLeader: campaign.partyLeaderId === player.id,
     inventory: player.inventory,
@@ -51,6 +54,7 @@ export function buildCampaignContext(campaign: Campaign) {
     `Players (include stats/HP): ${JSON.stringify(playerState)}`,
     `Current scene: ${campaign.currentScene}`,
     `Current TV overview: ${campaign.overview}`,
+    `Turn mode: ${describeTurnState(campaign)}`,
     `Current per-player controller actions: ${JSON.stringify(campaign.playerActions)}`,
     `Current shared party actions: ${JSON.stringify(campaign.partyActions)}`,
     `Long-term memory: ${campaign.memory || "None yet"}`,
@@ -100,6 +104,26 @@ function describeCurrentAmbience(campaign: Campaign): string {
   const parts = [`mood=${ambience.mood}`, `intensity=${ambience.intensity}`];
   if (ambience.note) parts.push(`note="${ambience.note}"`);
   return `${parts.join(", ")}. This is ALREADY playing — only call set_ambience if the emotional register genuinely changes to a different mood; do not re-send the same mood.`;
+}
+
+/**
+ * Tell the DM whether the table is in free exploration (resolve everyone at
+ * once) or sequential combat (resolve only the active actor / the enemy phase).
+ */
+function describeTurnState(campaign: Campaign): string {
+  const ts = campaign.turnState;
+  const nameOf = (id?: string) => {
+    const p = campaign.players.find((x) => x.id === id);
+    return p ? p.characterName || p.name : id;
+  };
+  if (!ts || ts.mode !== "combat") {
+    return "EXPLORATION (free). All able players lock in actions and you receive them together — resolve them in ONE narration. Call start_combat when a fight begins.";
+  }
+  const order = (ts.order || []).map(nameOf).filter(Boolean).join(" → ");
+  if (ts.activeId === "enemies") {
+    return `COMBAT (sequential), round ${ts.round || 1}. It is the ENEMIES' turn — resolve all hostile actions now (attack rolls, damage, moves). Initiative: ${order}.`;
+  }
+  return `COMBAT (sequential), round ${ts.round || 1}. Active actor: ${nameOf(ts.activeId)} — resolve ONLY their action this turn; do not act for the other players. Initiative: ${order}. Call end_combat when the fight ends.`;
 }
 
 function summarizeMessage(content: string) {

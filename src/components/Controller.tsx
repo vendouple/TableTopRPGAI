@@ -33,7 +33,7 @@ function splitEntry(entry: string): { name: string; detail?: string } {
  * cards and a free-form voice — under the thumb.
  */
 export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeave: () => void }) {
-  const { campaign, refresh, lost } = useCampaignPoll(seat.campaignId, false);
+  const { campaign, refresh, lost, reconnecting, hostActive } = useCampaignPoll(seat.campaignId, false, seat.playerId);
   const [tab, setTab] = useState<Tab>("act");
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
@@ -54,6 +54,25 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
   const isLeader = campaign?.partyLeaderId === seat.playerId;
   const color = accentColor(me?.color);
   const weaving = !!campaign?.dmStatus;
+  // Structured lifecycle gate: a stunned/incapacitated/dead player cannot act
+  // this turn. Undefined = able (back-compat). Drives a hard controller lock.
+  const canAct = me ? me.canAct !== false : true;
+  const downReason = me && me.canAct === false
+    ? (me.status || (me.conditions && me.conditions[0]) || "You can't act right now")
+    : null;
+  // Turn model (#1)
+  const turnMode = campaign?.turnState?.mode || "exploration";
+  const isCombat = turnMode === "combat";
+  const activeId = campaign?.turnState?.activeId;
+  const myCombatTurn = isCombat && activeId === seat.playerId;
+  const activePlayer = campaign?.players.find((p) => p.id === activeId);
+  const activeName = activeId === "enemies"
+    ? "the enemies"
+    : activePlayer ? (activePlayer.characterName || activePlayer.name) : null;
+  const lockedIn = !!(me && campaign?.pendingActions && campaign.pendingActions[me.id]);
+  const pendingCount = campaign?.pendingActions ? Object.keys(campaign.pendingActions).length : 0;
+  // In combat you must wait for your turn; in exploration everyone may lock in.
+  const turnBlocked = isCombat && !myCombatTurn;
 
   // Play a compact dice cinematic when the Weaver rolls for *this* player.
   useEffect(() => {
@@ -97,8 +116,9 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
   const myActions = campaign && me ? campaign.playerActions[me.id] || [] : [];
   const partyActions = campaign?.partyActions || [];
 
-  const act = async (prompt: string, display?: string) => {
-    if (!campaign || !me || sending || weaving) return;
+  const act = async (prompt: string, display?: string, partyActionId?: string) => {
+    if (!campaign || !me || sending || weaving || me.canAct === false) return;
+    if (isCombat && activeId !== me.id) return; // not your turn
     setSending(true);
     setSendError(null);
     playSfx("send");
@@ -108,12 +128,26 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
         playerId: me.id,
         action: prompt,
         displayAction: display,
-        actionId: createActionId()
+        actionId: createActionId(),
+        partyActionId
       });
       setComposer("");
       await refresh();
     } catch (err) {
       setSendError(err instanceof Error ? err.message : "The Weaver did not hear you. Try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const resolveNow = async () => {
+    if (!campaign || sending) return;
+    setSending(true);
+    try {
+      await api.party({ campaignId: campaign.id, action: "resolveRound" });
+      await refresh();
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Could not resolve the round.");
     } finally {
       setSending(false);
     }
@@ -134,6 +168,10 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
   };
 
   const leave = () => {
+    // Best-effort server notice so initiative/lock-ins don't wait on us.
+    if (campaign && me) {
+      api.party({ campaignId: campaign.id, action: "leave", playerId: me.id }).catch(() => {});
+    }
     clearSeat();
     onLeave();
   };
@@ -147,7 +185,7 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
         <div className="portal-veil" />
         <div className="loading-center">
           <span className="forge-circle" aria-hidden />
-          <p>{lost ? "The table is unreachable." : !campaign ? "Finding your seat…" : "Your seat is gone — the saga may have been deleted."}</p>
+          <p>{reconnecting ? "Reconnecting…" : lost ? "The table is unreachable." : !campaign ? "Finding your seat…" : "Your seat is gone — the saga may have been deleted."}</p>
           {(lost || campaign) && <button className="ghost-button" onClick={leave}>Leave the table</button>}
         </div>
       </div>
@@ -201,10 +239,17 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
   // Active controller ----------------------------------------------------
   const hp = me.stats.find((stat) => stat.name.toUpperCase() === "HP");
   const otherStats = me.stats.filter((stat) => stat.name.toUpperCase() !== "HP");
-  const npcsMet = campaign.storyCharacters.filter((npc) => npc.portraitUrl || (npc.status && npc.status !== "Future NPC"));
+  const npcsMet = campaign.storyCharacters.filter(
+    (npc) => npc.portraitUrl || (npc.stats && npc.stats.length > 0) || (npc.status && npc.status !== "Future NPC")
+  );
 
   return (
     <div className="controller screen active" style={{ ["--seat-color" as any]: color }}>
+      {reconnecting ? (
+        <div className="net-banner reconnecting">Reconnecting…</div>
+      ) : !hostActive ? (
+        <div className="net-banner host-down">Waiting for the screen to reconnect…</div>
+      ) : null}
       <header className="talisman">
         <div className="talisman-portrait" style={{ borderColor: color }}>
           {me.portraitUrl ? (
@@ -242,13 +287,36 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
       <main className="controller-body">
         {tab === "act" ? (
           <section className="act-panel">
-            {weaving ? (
+            {isCombat ? (
+              <div className={`turn-banner ${myCombatTurn ? "yours" : ""}`}>
+                {activeId === "enemies"
+                  ? "The enemies are acting…"
+                  : myCombatTurn
+                    ? "⚔ Your turn — make your move."
+                    : `Waiting — it's ${activeName || "another hero"}'s turn.`}
+                {campaign.turnState?.round ? <span className="turn-round"> · Round {campaign.turnState.round}</span> : null}
+              </div>
+            ) : null}
+            {!canAct ? (
+              <div className="weaving-lock downed">
+                <span className="sigil-ring small" aria-hidden />
+                <span>{downReason} — you sit this one out.</span>
+              </div>
+            ) : weaving ? (
               <div className="weaving-lock">
                 <span className="sigil-ring small" aria-hidden />
                 <span>{campaign.dmStatus}</span>
               </div>
+            ) : turnBlocked ? (
+              <div className="weaving-lock">
+                <span className="sigil-ring small" aria-hidden />
+                <span>It&apos;s {activeName || "another hero"}&apos;s turn. Watch how it unfolds…</span>
+              </div>
             ) : (
               <>
+                {lockedIn && !isCombat ? (
+                  <div className="turn-banner locked">Locked in ✓ — waiting for the party. Tap again to change.</div>
+                ) : null}
                 {myActions.length ? (
                   <div className="action-stack">
                     {myActions.map((action, index) => (
@@ -268,19 +336,24 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                 )}
                 {partyActions.length ? (
                   <div className="action-stack party">
-                    <span className="action-stack-label">Together</span>
+                    <span className="action-stack-label">Together{isCombat ? "" : " (all must agree)"}</span>
                     {partyActions.map((action, index) => (
                       <button
                         key={`${action.title}-${index}`}
                         className="action-card party"
                         disabled={sending}
-                        onClick={() => act(action.prompt, action.title)}
+                        onClick={() => act(action.prompt, action.title, `party:${index}`)}
                       >
                         <span className="action-glyph" aria-hidden>❖</span>
                         {action.title}
                       </button>
                     ))}
                   </div>
+                ) : null}
+                {isLeader && !isCombat && pendingCount > 0 ? (
+                  <button className="ghost-button resolve-now" disabled={sending} onClick={resolveNow}>
+                    Resolve the round now ({pendingCount} locked in)
+                  </button>
                 ) : null}
               </>
             )}
@@ -290,13 +363,13 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                 className="field textarea slim"
                 rows={2}
                 value={composer}
-                placeholder={weaving ? "The Weaver is weaving…" : "Speak or act in your own words…"}
-                disabled={weaving || sending}
+                placeholder={!canAct ? "You cannot act this turn…" : weaving ? "The Weaver is weaving…" : turnBlocked ? "Wait for your turn…" : "Speak or act in your own words…"}
+                disabled={!canAct || weaving || sending || turnBlocked}
                 onChange={(event) => setComposer(event.target.value)}
               />
               <button
                 className="primary-button"
-                disabled={weaving || sending || !composer.trim()}
+                disabled={!canAct || weaving || sending || turnBlocked || !composer.trim()}
                 onClick={() => act(composer.trim())}
               >
                 {sending ? "…" : "Do it"}
@@ -443,8 +516,24 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                   ) : <span className="party-face-glyph" aria-hidden>?</span>}
                 </div>
                 <div className="party-info">
-                  <span className="party-name" style={{ color: accentColor(npc.color, "#9aa4c0") }}>{npc.name}</span>
-                  {npc.status ? <span className="party-detail">{npc.status}</span> : null}
+                  {(() => {
+                    const nHp = (npc.stats || []).find((stat) => stat.name.toUpperCase() === "HP");
+                    const isGroup = npc.isGroup || (npc.count !== undefined && npc.count !== 1);
+                    return (
+                      <>
+                        <span className="party-name" style={{ color: accentColor(npc.color, "#9aa4c0") }}>
+                          {npc.name}{isGroup && npc.count !== undefined ? ` ×${npc.count}` : ""}
+                        </span>
+                        {nHp ? (
+                          <span className="party-detail">
+                            {nHp.value}/{nHp.maxValue} HP
+                            {isGroup && npc.count !== undefined ? ` · ${npc.count} left${npc.maxCount ? `/${npc.maxCount}` : ""}` : ""}
+                            {npc.status ? ` · ${npc.status}` : ""}
+                          </span>
+                        ) : npc.status ? <span className="party-detail">{npc.status}</span> : null}
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             ))}

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { useCampaignPoll } from "@/lib/client/api";
+import { useEffect, useMemo, useRef } from "react";
+import { api, useCampaignPoll } from "@/lib/client/api";
 import { bgmSetContext, bgmSetTheme, bgmStop } from "@/lib/client/audio";
 import HostLobby from "@/components/HostLobby";
 import HostStage from "@/components/HostStage";
@@ -44,6 +44,26 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
     else bgmSetContext(mood || "calm");
   }, [status, storyStarted, mood, endingKind]);
   useEffect(() => () => bgmStop(), []);
+
+  // Turn deadline backstop (#1/#2): the TV is always present, so it nudges the
+  // server when a round/turn stalls — resolving an exploration round with
+  // whoever locked in, or skipping an idle/absent combatant. Fires at most once
+  // per deadline; the server re-checks `auto` so eager clients don't race.
+  const backstopRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!campaign || campaign.status !== "active" || campaign.dmStatus) return;
+    const ts = campaign.turnState;
+    if (!ts?.deadlineAt) return;
+    if (Date.now() <= new Date(ts.deadlineAt).getTime()) return;
+    if (backstopRef.current === ts.deadlineAt) return;
+    backstopRef.current = ts.deadlineAt;
+    const hasPending = !!campaign.pendingActions && Object.keys(campaign.pendingActions).length > 0;
+    if (ts.mode === "exploration" && hasPending) {
+      api.party({ campaignId: campaign.id, action: "resolveRound", auto: true }).catch(() => {});
+    } else if (ts.mode === "combat") {
+      api.party({ campaignId: campaign.id, action: "skipTurn", auto: true }).catch(() => {});
+    }
+  }, [campaign]);
 
   if (!campaign) {
     return (

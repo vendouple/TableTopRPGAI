@@ -1,13 +1,20 @@
 import { buildCampaignContext } from "@/lib/campaign/context";
-import { getCampaign, saveCampaign, downloadAndSaveImage, logCampaignDebug, safePushDisplayEvent, isValidImageUrl, startCampaignDraft, finishCampaignDraft } from "@/lib/campaign/store";
+import { getCampaign, saveCampaign, downloadAndSaveImage, logCampaignDebug, safePushDisplayEvent, isValidImageUrl, startCampaignDraft, finishCampaignDraft, reconcilePresence } from "@/lib/campaign/store";
 import { createId } from "@/lib/utils/ids";
-import { aquaConfig, aquaFetch, AquaMessage, AquaToolCall } from "./client";
-import { runTool, toolDefinitions } from "@/lib/tools/registry";
+import { aquaConfig, aquaFetch, AquaFetchOptions, AquaMessage, AquaToolCall, AquaToolDefinition } from "./client";
+import { runTool, toolDefinitions, applyNpcGroupFields, applyConditionFields } from "@/lib/tools/registry";
 import { generateImage } from "@/lib/aqua/images";
-import { Campaign, PlayerStat } from "@/lib/campaign/types";
+import { Campaign, PlayerStat, StoryCharacter } from "@/lib/campaign/types";
 import { classifyMusicTheme, MUSIC_THEMES, MusicTheme } from "@/lib/campaign/musicTheme";
+import { advanceCombat, buildExplorationResolution, ENEMY_SLOT } from "@/lib/campaign/turns";
+
+// Verbose per-step/per-request server logs flood the console during play
+// (AI steps, tool calls, poll-adjacent chatter). Off by default; set
+// DEBUG_VERBOSE=1 to see them. Errors always print (see serverError).
+const VERBOSE = process.env.DEBUG_VERBOSE === "1" || process.env.DEBUG_VERBOSE === "true";
 
 export function serverLog(category: string, message: string, data?: any) {
+  if (!VERBOSE) return;
   const timestamp = new Date().toLocaleTimeString();
   const dataStr = data ? ` | ${typeof data === "object" ? JSON.stringify(data) : data}` : "";
   console.log(`\x1b[35m[DND SERVER]\x1b[0m [${timestamp}] \x1b[36m[${category}]\x1b[0m ${message}${dataStr}`);
@@ -18,6 +25,32 @@ export function serverError(category: string, message: string, error?: any) {
   const errorMsg = error instanceof Error ? error.stack : String(error || "");
   console.error(`\x1b[31m[DND ERROR]\x1b[0m [${timestamp}] \x1b[36m[${category}]\x1b[0m ${message}${errorMsg ? `\n${errorMsg}` : ""}`);
 }
+
+/**
+ * Fire-and-forget update of the live DM status line the TV/controllers show.
+ * Used to surface slow-request retries mid-turn. Non-fatal on failure. During
+ * a DM turn getCampaign returns the draft, so this reaches pollers.
+ */
+async function writeDmStatus(campaignId: string, status: string) {
+  try {
+    const campaign = await getCampaign(campaignId);
+    campaign.dmStatus = status;
+    await saveCampaign(campaign);
+  } catch {
+    /* non-fatal — status is cosmetic */
+  }
+}
+
+// Max tool-calling steps per DM turn. Combat turns chain many rolls + state
+// updates, so 8 was too tight (turns hit the cap mid-fight). Env-overridable.
+const MAX_DM_STEPS = Math.max(4, Number(process.env.AQUA_MAX_TOOL_STEPS) || 16);
+
+// Interactive DM turns fail fast: a dead endpoint should surface in seconds,
+// not after 6×60s of silence. Non-interactive generation keeps the defaults.
+const INTERACTIVE_FETCH: Pick<AquaFetchOptions, "retries" | "timeoutMs"> = {
+  retries: Math.max(1, Number(process.env.AQUA_INTERACTIVE_RETRIES) || 3),
+  timeoutMs: Math.max(5000, Number(process.env.AQUA_INTERACTIVE_TIMEOUT_MS) || 45000)
+};
 
 const systemPrompt = `You are the Dungeon Master for a couch RPG. TV shows cinematic story; phones are player controllers.
 
@@ -36,7 +69,7 @@ Dice rules (the server rolls — you NEVER pick, predict, or invent numbers; nar
 - A d20 check: call roll_dice with d20Mode "normal" and a dc. Base DC: Easy 10, Medium 15, Hard 20, Very Hard 25.
 - Campaign Difficulty shifts base DCs: easy −2, medium 0, hard +2, insane +4. Apply this BEFORE ability fit.
 - Ability fit shifts the DC further: a character whose listed special ability directly covers the task: DC −2 or −3. Specialist task with NO fitting ability/tool: DC +2 to +5.
-- d20Mode "advantage" is RARE (overwhelming situational dominance only). "disadvantage" mirrors severe impairment. Having a relevant ability is NOT advantage — that's a DC shift.
+- d20Mode "advantage"/"disadvantage" is the DM's discretionary call for a REAL situational swing (high ground, flanking, ambush → advantage; blinded, prone, restrained, terrible footing → disadvantage). Use it sparingly. Having a relevant ability is NOT advantage — that's a DC shift.
 - Only use +N/−N modifiers in notation for real damage math or explicit sheet stats.
 - Outcome spectrum (honor EXACTLY): critical-success (nat 20), strong-success (beat DC by 5+), success, partial-success (miss by 1–4 with a cost — only on easy/medium), failure, hard-failure (miss by 5+), critical-failure (nat 1). On hard/insane, near-misses are full failures (no partials).
 - ENEMY/NPC rolls: call roll_dice with isNpc true and playerName set to the NPC name so the TV dice theater shows them. Chain multiple rolls in one turn for combat (attack → damage, contested checks, multi-enemy).
@@ -60,7 +93,8 @@ Combat & encounters MUST honor difficulty:
 - Player attack to damage an enemy: set dc to that enemy's defense (base Medium 15 +/- difficulty bias +/- ability fit). Harder difficulty = harder to land hits.
 - Enemy attack on a player: isNpc true; dc = player defense (same ladder). Harder difficulty = enemies hit more often (lower effective player defense or higher enemy attack competence).
 - Escape / run away / disengage: always a d20 vs DC on the ladder above; hard/insane make escape costly or fail more often.
-- Damage dice after a hit: scale threat with difficulty (easy: lighter dice / fewer hits land; insane: heavier dice, multi-enemy pressure). Always apply HP via playerUpdates/npcUpdates after harm.
+- Damage on a hit is MANDATORY: after any successful attack (player OR enemy), immediately roll_dice for the damage, then apply the HP change via playerUpdates/npcUpdates. Never narrate a wound without subtracting HP.
+- Bonus/reduced damage is the DM's discretionary call: when the attacker has a clear edge (advantage, vulnerability, perfect setup) you MAY add to the damage; when the target resists or the blow is glancing you MAY reduce it. Scale base damage dice with difficulty (easy lighter; insane heavier, multi-enemy pressure).
 - Contested social/stealth/skill checks use the same DC ladder + difficulty bias.
 
 Continuity & assets:
@@ -69,7 +103,8 @@ Continuity & assets:
 - New NPC/monster on stage: call generate_image with kind "portrait" and npcName BEFORE introducing them.
 - When the party moves somewhere visually new, update the TV backdrop (reuse currentImageUrl or generate_image kind "scene").
 - Maintain quest_log.md with ONLY the current active objective and immediate tasks.
-- Give important NPCs short mechanical profiles (HP, key traits/abilities) via npcUpdates so combat is fair and trackable.
+- Seed every foe with HP via npcUpdates the moment it enters the scene, so the TV shows an enemy HP bar and hits have something to subtract.
+- Group handling: a NAMED or role foe (leader, lieutenant, champion — anyone who speaks or matters) is ALWAYS its own npcUpdates entry with its own HP. Only faceless rank-and-file (e.g. "Iron Warrens Thugs") are pooled into ONE entry with isGroup:true, count (how many stand), and maxCount. Decrement count as they drop; don't flood the UI with a card per mook.
 
 Cinematic direction (you are also the stage director):
 - If set_theme is offered and no score is chosen yet, call set_theme EXACTLY ONCE on the opening turn.
@@ -95,19 +130,32 @@ Narration style (the TV performs each story beat one at a time):
 - Dramatize player actions with the character's EXACT name as speaker (third-person cinema of what they declared only).
 - Speaker values: "NARRATOR", "SYSTEM", an NPC name, or a player character's exact name.
 
-Controller choices:
-- Provide 1–4 playerActions per active player (not always 2–4). Fewer when the situation is constrained; more when open. Empty only when incapacitated or campaign completed.
+Turns & combat flow (the table has two modes — honor the one in the context):
+- EXPLORATION (default): all able players lock in simultaneously and you receive their actions together. Resolve them in ONE flowing narration where their choices interact.
+- COMBAT (sequential): call start_combat when a fight begins. Then you resolve ONE actor per turn — only the active player's action (named in the context), never the others. After the last player, you get the enemies' turn: resolve every foe's action (attack roll → damage → apply HP). Call end_combat when the fight is over. Narrate initiative naturally ("Engu, you're up").
+- Don't switch modes needlessly; stay in exploration for talk/travel/investigation, combat only for actual fights.
 
-CRITICAL: Return ONLY a single, valid JSON object. No markdown code blocks. No prose outside JSON. Run any tool calls first, then output the final JSON when you are ready to end your turn.`;
+Conditions & lifecycle (ENFORCED — not just flavor):
+- When a character is stunned, incapacitated, knocked out, or dead, set canAct:false on their playerUpdates/npcUpdates entry (and a matching conditions list, e.g. ["stunned"] or ["dead"], plus a status line). Their controller hard-locks — they truly cannot act that turn.
+- Clear it by setting canAct:true (and removing the condition) the moment they recover — a stun that ends next turn, a revive, standing back up.
+- A dead player stays canAct:false with empty playerActions for the rest of the saga; weave them out of the action.
+
+Controller choices:
+- Provide 1–4 playerActions per active player (not always 2–4). Fewer when the situation is constrained; more when open. Empty only when incapacitated (canAct:false) or campaign completed.
+
+CRITICAL — how to end your turn:
+- Run any other tools first (dice, images, ambience). THEN end your turn by calling the narrate_turn tool EXACTLY ONCE with your story beats and final state. This is the required, reliable way to finish.
+- Do NOT also write prose or JSON in the message content — narrate_turn carries everything.
+- (Only if you truly cannot call narrate_turn: return ONLY a single valid JSON object matching the shape below, no markdown fences, no prose.)`;
 
 const turnChecklistPrompt = `Before responding:
 1. Read current task, difficulty, roll mode, and whether the campaign is already completed.
 2. Check active players (stats/HP), scene, quest, NPCs, and recent transcript.
-3. Call required tools before final JSON (dice, images, ambience, effects, end_campaign if the saga closes).
+3. Call required tools before ending (dice, images, ambience, effects, end_campaign if the saga closes).
 4. Honor dice outcomes exactly (full spectrum). Update HP/stats after harm or healing.
-5. Return compact JSON with updates. If campaign ended, leave playerActions empty.
+5. END by calling narrate_turn (preferred) with story + updates. If the campaign ended, leave playerActions empty.
 
-Required JSON shape:
+The narrate_turn tool takes the same fields as this shape (story, title, currentScene, overview, playerActions, partyActions, playerUpdates, npcUpdates). Only if you cannot call it, emit this JSON instead:
 {"story":[{"speaker":"NARRATOR|SYSTEM|NPC name|player character name","content":"short beat (1-3 sentences, may use *italic*/**bold** inline markdown)","itemUsed":"optional","abilityUsed":"optional"}],"title":"optional","currentScene":"optional","overview":"optional","playerActions":{"<playerId>":[{"title":"Look around","prompt":"I look around."}]},"partyActions":[{"title":"Shared Action","prompt":"We act together."}],"playerUpdates":[{"playerId":"...","characterName":"optional","background":"optional","portraitUrl":"optional","portraitPrompt":"optional","status":"Ready/Active/Stunned/etc.","inventory":["item"],"abilities":["ability"],"notes":"private notes","color":"cyan","stats":[{"name":"HP","value":15,"maxValue":20,"color":"red"}]}],"npcUpdates":[{"id":"existing id","renameFrom":"old name","name":"NPC name","description":"desc","portraitUrl":"url","status":"Ready","color":"orange","inventory":["item"],"abilities":["ability"],"stats":[{"name":"HP","value":15,"maxValue":15,"color":"red"}]}]}
 
 Always provide playerActions (1–4 choices) for every active player unless incapacitated or the campaign has ended.`;
@@ -138,6 +186,117 @@ function campaignRulesPrompt(campaign: { campaignType?: string; rulesMode?: stri
   return campaign.rulesMode === "full" ? fullRulesPrompt : dndCasualRulesPrompt;
 }
 
+// The preferred way for the model to END its turn: a single structured tool
+// call instead of free-form final JSON. Small/RP models are far more reliable
+// at emitting a validated tool call than at closing a big JSON object, so this
+// is the primary path; the free-JSON parser remains as a cross-model fallback.
+const actionItemSchema = {
+  type: "object",
+  required: ["title", "prompt"],
+  properties: {
+    title: { type: "string", description: "Short button label shown on the phone." },
+    prompt: { type: "string", description: "Detailed hidden prompt sent if the player taps this choice." }
+  }
+} as const;
+
+const statSchema = {
+  type: "object",
+  required: ["name", "value"],
+  properties: {
+    name: { type: "string" },
+    value: { type: "number" },
+    maxValue: { type: "number", description: "Optional — omit to keep the existing max." },
+    color: { type: "string" }
+  }
+} as const;
+
+const narrateTurnTool: AquaToolDefinition = {
+  type: "function",
+  function: {
+    name: "narrate_turn",
+    description: "END YOUR TURN by calling this EXACTLY ONCE after all other tools (dice, images, ambience). Deliver the story beats and the final state here. This REPLACES the final JSON — do not also emit prose. story[] is the ONLY place narration/dialogue goes.",
+    parameters: {
+      type: "object",
+      required: ["story"],
+      properties: {
+        story: {
+          type: "array",
+          description: "Ordered cinematic beats, each SHORT (1-3 sentences). speaker = NARRATOR, SYSTEM, an NPC name, or a player character's exact name.",
+          items: {
+            type: "object",
+            required: ["speaker", "content"],
+            properties: {
+              speaker: { type: "string" },
+              content: { type: "string", description: "1-3 sentences; inline *italic*/**bold** allowed." },
+              itemUsed: { type: "string" },
+              abilityUsed: { type: "string" }
+            }
+          }
+        },
+        title: { type: "string" },
+        currentScene: { type: "string" },
+        overview: { type: "string", description: "Brief TV overview of the situation. No controller choices here." },
+        playerActions: {
+          type: "array",
+          description: "Per-player controller buttons (1-4 each). Empty for a player who is incapacitated/dead or when the campaign ended.",
+          items: {
+            type: "object",
+            required: ["playerId", "actions"],
+            properties: {
+              playerId: { type: "string" },
+              actions: { type: "array", items: actionItemSchema }
+            }
+          }
+        },
+        partyActions: { type: "array", description: "Optional shared 'together' actions shown on every phone.", items: actionItemSchema },
+        playerUpdates: {
+          type: "array",
+          description: "Apply HP/stat/inventory/status changes after harm or healing.",
+          items: {
+            type: "object",
+            properties: {
+              playerId: { type: "string" },
+              playerName: { type: "string" },
+              status: { type: "string", description: "Free-text flavor line." },
+              conditions: { type: "array", items: { type: "string" }, description: "e.g. ['stunned'] or ['dead']." },
+              canAct: { type: "boolean", description: "False when stunned/incapacitated/dead — locks their controller." },
+              inventory: { type: "array", items: { type: "string" } },
+              abilities: { type: "array", items: { type: "string" } },
+              notes: { type: "string" },
+              color: { type: "string" },
+              stats: { type: "array", items: statSchema }
+            }
+          }
+        },
+        npcUpdates: {
+          type: "array",
+          description: "Create/update NPCs & enemies. Seed HP when a foe appears. Pool ONLY faceless minions via isGroup+count; named/role NPCs stay individual.",
+          items: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              id: { type: "string" },
+              renameFrom: { type: "string" },
+              name: { type: "string" },
+              description: { type: "string" },
+              status: { type: "string" },
+              conditions: { type: "array", items: { type: "string" } },
+              canAct: { type: "boolean" },
+              isGroup: { type: "boolean", description: "TRUE only for pooled faceless rank-and-file (never a named leader/lieutenant)." },
+              count: { type: "number", description: "Group: how many still standing." },
+              maxCount: { type: "number", description: "Group: size at first encounter." },
+              color: { type: "string" },
+              inventory: { type: "array", items: { type: "string" } },
+              abilities: { type: "array", items: { type: "string" } },
+              stats: { type: "array", items: statSchema }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
 type ChatCompletionResponse = {
   choices?: Array<{
     message?: AquaMessage;
@@ -152,6 +311,12 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
   // Backdrop the party sees BEFORE this turn's tools run, so afterward we can
   // tell whether the DM repainted it itself or left it stale.
   const preTurnImageUrl = campaign.currentImageUrl;
+  // Snapshot the choices on the table BEFORE this turn. If the turn fails
+  // (dead endpoint, unparseable output), we restore these so the party can
+  // simply retry the same options instead of being stranded with empty cards.
+  const preTurnPlayerActions = JSON.parse(JSON.stringify(campaign.playerActions || {}));
+  const preTurnPartyActions = JSON.parse(JSON.stringify(campaign.partyActions || []));
+  const preTurnSuggestedActions = JSON.parse(JSON.stringify(campaign.suggestedActions || []));
   const isJoin = action.startsWith("A new player has joined") || action.startsWith("A new player joined");
   const isRejoin = action.startsWith("Player ") && action.includes("rejoined");
   const isInitialStart = action.startsWith("Start the couch campaign now.");
@@ -185,21 +350,33 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
     ];
 
     let finalMessage: AquaMessage | null = null;
+    // Populated when the model ends its turn via the narrate_turn tool (the
+    // reliable path). When set, it IS the turn's final structured result.
+    let structuredResult: Record<string, any> | null = null;
     const toolEvents: string[] = [];
     // Once the score is chosen (now or on a past turn), drop set_theme from
     // the offered tools so it can't be picked again mid-turn.
     let themeChosen = !!campaign.musicTheme;
 
-    for (let step = 0; step < 8; step += 1) {
+    // Interactive fetch: fail fast, and surface each retry to the TV so a slow
+    // request reads as "retrying (2/3)" instead of a silent multi-minute hang.
+    const interactiveFetch: AquaFetchOptions = {
+      ...INTERACTIVE_FETCH,
+      onRetry: ({ attempt, retries }) => {
+        void writeDmStatus(campaignId, `The connection wavers… retrying (${attempt}/${retries})`);
+      }
+    };
+
+    for (let step = 0; step < MAX_DM_STEPS; step += 1) {
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Requesting completion...`);
-      serverLog("DM AI Step", `Step ${step + 1}/8: Requesting completion...`);
-      const response = await complete(messages, "auto", toolsForTurn({ musicTheme: themeChosen ? "set" : undefined }));
+      serverLog("DM AI Step", `Step ${step + 1}/${MAX_DM_STEPS}: Requesting completion...`);
+      const response = await complete(messages, "auto", [...toolsForTurn({ musicTheme: themeChosen ? "set" : undefined }), narrateTurnTool], interactiveFetch);
       const message = response.choices?.[0]?.message || response.message;
       if (!message) throw new Error("Aqua chat response did not include a message");
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Received response: ${JSON.stringify(message)}`);
       
       const toolCalls = normalizeToolCalls(message);
-      serverLog("DM AI Step", `Step ${step + 1}/8: Received response. Tool calls found: ${toolCalls.length}`);
+      serverLog("DM AI Step", `Step ${step + 1}/${MAX_DM_STEPS}: Received response. Tool calls found: ${toolCalls.length}`);
       if (!toolCalls.length) {
         finalMessage = message;
         break;
@@ -207,6 +384,21 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
 
       messages.push({ ...message, content: message.content || "" });
       for (const call of toolCalls) {
+        // narrate_turn is the turn terminator, not an executable tool: capture
+        // its validated args as the final structured result and stop. Any other
+        // tools in the same step are still executed above/below.
+        if (call.function.name === "narrate_turn") {
+          try {
+            structuredResult = typeof call.function.arguments === "string"
+              ? JSON.parse(call.function.arguments || "{}")
+              : (call.function.arguments as Record<string, any>) || {};
+          } catch (err) {
+            await logCampaignDebug(campaignId, `[narrate_turn] argument parse failed: ${err}`);
+            structuredResult = null;
+          }
+          await logCampaignDebug(campaignId, `[Tool Call] narrate_turn (turn terminator)`);
+          continue;
+        }
         // Update dmStatus before executing tool
         const current = await getCampaign(campaignId);
         const originalStatus = current.dmStatus || "";
@@ -315,18 +507,29 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
         toolEvents.push(`${call.function.name}: ${resultText}`);
         messages.push({ role: "tool", tool_call_id: call.id, content: resultText });
       }
+      // The model ended its turn via narrate_turn — stop looping.
+      if (structuredResult) break;
     }
 
-    if (!finalMessage) {
-      serverError("DM Loop", "Tool loop exceeded maximum steps (8).");
+    if (!finalMessage && !structuredResult) {
+      serverError("DM Loop", `Tool loop exceeded maximum steps (${MAX_DM_STEPS}).`);
       throw new Error("Tool loop exceeded maximum steps");
     }
 
-    let content = finalMessage.content || "";
-    await logCampaignDebug(campaignId, `[AI Finish] Final response content: ${content}`);
-    let parsedJson = await parseFinalJson(campaignId, content);
+    let content = finalMessage?.content || "";
+    let parsedJson: Record<string, any> | null = null;
 
-    if (!parsedJson) {
+    if (structuredResult) {
+      // Reliable path: use the validated tool args directly — no JSON parsing.
+      parsedJson = structuredResult;
+      content = JSON.stringify(structuredResult);
+      await logCampaignDebug(campaignId, `[AI Finish] Turn ended via narrate_turn (structured).`);
+    } else {
+      await logCampaignDebug(campaignId, `[AI Finish] Final response content: ${content}`);
+      parsedJson = await parseFinalJson(campaignId, content);
+    }
+
+    if (!structuredResult && !parsedJson) {
       await logCampaignDebug(campaignId, `[AI Retry] Retrying final response because JSON parsing failed.`);
       serverLog("DM Parser", "Retrying final response because JSON parsing failed.");
       const retryResponse = await complete([
@@ -336,7 +539,7 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
           role: "user",
           content: "Your previous response was not valid JSON and could not be applied to the campaign. Return the same narrative result again as ONLY strict JSON matching the required schema. Do not call tools. Do not include prose or markdown fences."
         }
-      ], "none");
+      ], "none", toolDefinitions, INTERACTIVE_FETCH);
       const retryMessage = retryResponse.choices?.[0]?.message || retryResponse.message;
       const retryContent = retryMessage?.content || "";
       await logCampaignDebug(campaignId, `[AI Retry] Final response content: ${retryContent}`);
@@ -495,6 +698,7 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
           }
           if (typeof update.portraitPrompt === "string") player.portraitPrompt = update.portraitPrompt;
           if (typeof update.color === "string") player.color = update.color;
+          applyConditionFields(player, update);
           if (Array.isArray(update.stats)) {
             player.stats = mergeStats(player.stats, update.stats);
           }
@@ -530,6 +734,8 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
             if (typeof update.color === "string") char.color = update.color;
             if (Array.isArray(update.inventory)) char.inventory = update.inventory.map(String);
             if (Array.isArray(update.abilities)) char.abilities = update.abilities.map(String);
+            applyNpcGroupFields(char, update);
+            applyConditionFields(char, update);
             if (Array.isArray(update.stats)) {
               char.stats = mergeStats(char.stats, update.stats);
             }
@@ -539,7 +745,7 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
             if (typeof update.portraitUrl === "string" && isValidImageUrl(update.portraitUrl)) {
               localUrl = await downloadAndSaveImage(campaignId, update.portraitUrl, "npcs", newCharId);
             }
-            const npc = {
+            const npc: StoryCharacter = {
               id: newCharId,
               name: String(update.name || "NPC"),
               description: String(update.description || ""),
@@ -550,6 +756,8 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
               abilities: Array.isArray(update.abilities) ? update.abilities.map(String) : [],
               stats: Array.isArray(update.stats) ? mergeStats([], update.stats) : []
             };
+            applyNpcGroupFields(npc, update);
+            applyConditionFields(npc, update);
             if (localUrl) {
               if (!latestCampaign.portraits) latestCampaign.portraits = [];
               const exists = latestCampaign.portraits.some((p) => p.url === localUrl);
@@ -591,7 +799,14 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
         if (scene) {
           if (modelChangedBackdrop) {
             latestCampaign.backdropScene = scene; // the DM handled it this turn
-          } else if (!latestCampaign.backdropScene || sceneSimilarity(scene, latestCampaign.backdropScene) < 0.6) {
+          } else if (
+            !latestCampaign.backdropScene ||
+            sceneSimilarity(scene, latestCampaign.backdropScene) < 0.75 ||
+            // Also reconcile when the situation summary has clearly moved on,
+            // even if the short scene label reads similar — keeps the backdrop
+            // from going stale across a long beat in one location.
+            sceneSimilarity(`${scene} ${latestCampaign.overview || ""}`, latestCampaign.backdropScene) < 0.6
+          ) {
             const decision = await chooseBackdrop(latestCampaign, false);
             await applyBackdropDecision(latestCampaign, decision, scene, false);
           }
@@ -626,12 +841,73 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
       const currentCampaign = await getCampaign(campaignId);
       currentCampaign.dmStatus = undefined;
       currentCampaign.dmPhase = undefined;
+      // Fall back to the last option: restore the choices that were on the
+      // table before this failed turn so the party can retry immediately
+      // instead of being stranded with empty controllers.
+      currentCampaign.playerActions = preTurnPlayerActions;
+      currentCampaign.partyActions = preTurnPartyActions;
+      currentCampaign.suggestedActions = preTurnSuggestedActions;
       await saveCampaign(currentCampaign);
     } catch (dbErr) {
       serverError("Dungeon Master", "Failed to clear dmStatus on error", dbErr);
     }
     throw error;
   }
+}
+
+/**
+ * Resolve a full EXPLORATION round: fold every locked-in action into ONE DM
+ * turn (honoring unanimous "together" actions), pushing each player's choice as
+ * a user message + display beat first so the transcript and TV reflect it.
+ */
+export async function resolveExplorationRound(campaignId: string): Promise<Campaign> {
+  const campaign = await getCampaign(campaignId);
+  reconcilePresence(campaign); // absent players don't count toward the round
+  const { action, displays } = buildExplorationResolution(campaign);
+  if (!displays.length) {
+    // Nothing locked in (all away/incapacitated) — just clear and return.
+    campaign.pendingActions = {};
+    if (campaign.turnState?.mode === "exploration") campaign.turnState.deadlineAt = undefined;
+    await saveCampaign(campaign);
+    return campaign;
+  }
+  for (const d of displays) {
+    campaign.messages.push({ id: createId("msg"), role: "user", name: d.name, content: d.action, createdAt: new Date().toISOString() });
+    safePushDisplayEvent(campaign, { type: "playerAction", speaker: d.name, playerId: d.playerId, content: d.display });
+  }
+  campaign.pendingActions = {};
+  if (campaign.turnState?.mode === "exploration") campaign.turnState.deadlineAt = undefined;
+  await saveCampaign(campaign);
+  const result = await runDungeonMaster(campaignId, "The Party", action, { hiddenUserMessage: true });
+  return result.campaign;
+}
+
+/**
+ * After a combat actor's turn resolves, advance the initiative pointer. Each
+ * time it lands on the enemy slot, run ONE hidden DM turn for the enemies, then
+ * advance again — looping until it's a player's turn (or combat ended).
+ */
+export async function advanceCombatAndRunEnemies(campaignId: string): Promise<Campaign> {
+  let campaign = await getCampaign(campaignId);
+  if (campaign.turnState?.mode !== "combat") return campaign;
+  reconcilePresence(campaign); // drop disconnected players from initiative
+  let active = advanceCombat(campaign);
+  await saveCampaign(campaign);
+
+  let guard = 0;
+  while (active === ENEMY_SLOT && guard++ < 4) {
+    await runDungeonMaster(
+      campaignId,
+      "Enemies",
+      "It is the enemies' turn. Resolve every hostile NPC's action now — attacks (roll to hit, then damage), moves, taunts, retreats — and apply HP changes. If the fight is over (all foes down or fled), call end_campaign only if the whole saga closes, otherwise call end_combat. Then hand the turn back to the players.",
+      { hiddenUserMessage: true }
+    );
+    campaign = await getCampaign(campaignId);
+    if (campaign.turnState?.mode !== "combat") break;
+    active = advanceCombat(campaign);
+    await saveCampaign(campaign);
+  }
+  return campaign;
 }
 
 type BackdropDecision = { mode: "keep" | "reuse" | "new"; backgroundId?: string; prompt?: string };
@@ -700,7 +976,8 @@ async function chooseBackdrop(campaign: Campaign, force: boolean): Promise<Backd
     const response = (await aquaFetch("/chat/completions", {
       method: "POST",
       body: JSON.stringify({
-        model: config.chatModel,
+        // Constrained forced-tool call → safe for the small/fast model.
+        model: config.fastModel || config.chatModel,
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
         tools: [tool],
         tool_choice: { type: "function", function: { name: "set_backdrop" } }
@@ -800,7 +1077,8 @@ function stripSuggestedActions(content: string) {
 async function complete(
   messages: AquaMessage[],
   toolChoice: "auto" | "none" = "auto",
-  tools: typeof toolDefinitions = toolDefinitions
+  tools: typeof toolDefinitions = toolDefinitions,
+  fetchOptions: AquaFetchOptions = {}
 ) {
   const config = aquaConfig();
   return (await aquaFetch("/chat/completions", {
@@ -811,7 +1089,7 @@ async function complete(
       tools,
       tool_choice: toolChoice
     })
-  })) as ChatCompletionResponse;
+  }, fetchOptions)) as ChatCompletionResponse;
 }
 
 /**
@@ -852,7 +1130,8 @@ async function pickMusicThemeViaTool(campaign: Campaign): Promise<MusicTheme | n
   const response = (await aquaFetch("/chat/completions", {
     method: "POST",
     body: JSON.stringify({
-      model: config.chatModel,
+      // Constrained forced-tool call → safe for the small/fast model.
+      model: config.fastModel || config.chatModel,
       messages: [
         {
           role: "system",
@@ -900,32 +1179,74 @@ export async function chooseCampaignTheme(campaignId: string): Promise<Campaign>
   return campaign;
 }
 
+/**
+ * Best-effort repair of not-quite-valid JSON from weaker models: strips code
+ * fences, drops trailing commas, and balances an unterminated tail of braces/
+ * brackets (a common truncation). Returns candidate strings to try in order.
+ */
+function repairJsonCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  let s = raw.trim();
+  // Strip ```json ... ``` fences if present.
+  s = s.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  const startIdx = s.indexOf("{");
+  const endIdx = s.lastIndexOf("}");
+  if (startIdx === -1) return candidates;
+  const sliced = endIdx > startIdx ? s.substring(startIdx, endIdx + 1) : s.substring(startIdx);
+  candidates.push(sliced);
+  // Remove trailing commas before } or ].
+  const noTrailingCommas = sliced.replace(/,\s*([}\]])/g, "$1");
+  if (noTrailingCommas !== sliced) candidates.push(noTrailingCommas);
+  // Balance unterminated braces/brackets by appending closers (ignoring those
+  // inside strings). Handles the frequent "cut off mid-object" truncation.
+  const base = noTrailingCommas;
+  let inStr = false, esc = false;
+  const stack: string[] = [];
+  for (const ch of base) {
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (stack.length || inStr) {
+    const closed = (inStr ? base + '"' : base) + stack.reverse().join("");
+    const closedClean = closed.replace(/,\s*([}\]])/g, "$1");
+    candidates.push(closedClean);
+  }
+  return candidates;
+}
+
 async function parseFinalJson(campaignId: string, content: string) {
-  const startIdx = content.indexOf("{");
-  const endIdx = content.lastIndexOf("}");
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
+  const candidates = repairJsonCandidates(content);
+  if (!candidates.length) {
     serverLog("DM Parser", "AI response did not contain a JSON block. Falling back to plain text.");
     await logCampaignDebug(campaignId, `[AI Finish] Response did not contain a JSON block.`);
     return null;
   }
 
-  const jsonStr = content.substring(startIdx, endIdx + 1);
-  try {
-    const parsedJson = JSON.parse(jsonStr);
-    await logCampaignDebug(campaignId, `[AI Finish] Parsed JSON successfully.`);
-    serverLog("DM Parser", "Successfully parsed story JSON response.", {
-      title: parsedJson.title || undefined,
-      currentScene: parsedJson.currentScene || undefined,
-      storyCount: Array.isArray(parsedJson.story) ? parsedJson.story.length : 0,
-      playerUpdatesCount: Array.isArray(parsedJson.playerUpdates) ? parsedJson.playerUpdates.length : 0,
-      npcUpdatesCount: Array.isArray(parsedJson.npcUpdates) ? parsedJson.npcUpdates.length : 0,
-    });
-    return parsedJson;
-  } catch (err) {
-    serverError("DM Parser", "Failed to parse JSON content from AI message. Error: " + String(err));
-    await logCampaignDebug(campaignId, `[AI Finish] Failed to parse JSON content. Error: ${err}`);
-    return null;
+  let lastErr: unknown = null;
+  for (const candidate of candidates) {
+    try {
+      const parsedJson = JSON.parse(candidate);
+      await logCampaignDebug(campaignId, `[AI Finish] Parsed JSON successfully${candidate === candidates[0] ? "" : " (after repair)"}.`);
+      serverLog("DM Parser", "Successfully parsed story JSON response.", {
+        title: parsedJson.title || undefined,
+        currentScene: parsedJson.currentScene || undefined,
+        storyCount: Array.isArray(parsedJson.story) ? parsedJson.story.length : 0,
+        playerUpdatesCount: Array.isArray(parsedJson.playerUpdates) ? parsedJson.playerUpdates.length : 0,
+        npcUpdatesCount: Array.isArray(parsedJson.npcUpdates) ? parsedJson.npcUpdates.length : 0,
+      });
+      return parsedJson;
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  serverError("DM Parser", "Failed to parse JSON content from AI message. Error: " + String(lastErr));
+  await logCampaignDebug(campaignId, `[AI Finish] Failed to parse JSON content (tried ${candidates.length} repairs). Error: ${lastErr}`);
+  return null;
 }
 
 function normalizeToolCalls(message: AquaMessage): AquaToolCall[] {
@@ -945,20 +1266,33 @@ function normalizeActions(actions: unknown): Array<{ title: string; prompt: stri
 function mergeStats(currentStats: PlayerStat[] | undefined, incomingStats: any[]): PlayerStat[] {
   const merged = Array.isArray(currentStats) ? [...currentStats] : [];
   for (const s of incomingStats) {
-    const nameStr = String(s.name || "Stat");
+    if (!s || typeof s !== "object") continue;
+    const nameStr = String(s.name || "").trim();
+    if (!nameStr) continue;
+    const value = Number(s.value ?? 0);
+    if (!Number.isFinite(value)) continue;
     const existingIdx = merged.findIndex((item) => item.name.toLowerCase() === nameStr.toLowerCase());
+    const incomingMax = Number(s.maxValue);
     if (existingIdx !== -1) {
+      const prev = merged[existingIdx];
+      // maxValue omitted/invalid → keep the existing max (don't reset to a
+      // default — that would silently cap HP). narrate_turn makes maxValue
+      // optional precisely so the model can send just {name, value}.
+      const maxValue = Number.isFinite(incomingMax) && incomingMax > 0 ? incomingMax : prev.maxValue;
       merged[existingIdx] = {
-        name: merged[existingIdx].name,
-        value: Number(s.value ?? 0),
-        maxValue: Number(s.maxValue ?? 10),
-        color: s.color ? String(s.color) : merged[existingIdx].color
+        name: prev.name,
+        value,
+        maxValue,
+        color: s.color ? String(s.color) : prev.color
       };
     } else {
+      // New stat with no max → fall back to the value itself (so a full bar),
+      // then 10 as a last resort.
+      const maxValue = Number.isFinite(incomingMax) && incomingMax > 0 ? incomingMax : (value > 0 ? value : 10);
       merged.push({
         name: nameStr,
-        value: Number(s.value ?? 0),
-        maxValue: Number(s.maxValue ?? 10),
+        value,
+        maxValue,
         color: s.color ? String(s.color) : undefined
       });
     }

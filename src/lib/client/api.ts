@@ -25,8 +25,13 @@ function post<T>(url: string, body: Record<string, unknown>): Promise<T> {
 export const api = {
   listCampaigns: () => request<{ campaigns: CampaignSummary[] }>("/api/campaigns"),
   createCampaign: (body: Record<string, unknown>) => post<{ campaign: Campaign }>("/api/campaigns", body),
-  getCampaign: (id: string, host?: boolean) =>
-    request<{ campaign: Campaign }>(`/api/campaigns/${encodeURIComponent(id)}${host ? "?host=1" : ""}`),
+  getCampaign: (id: string, host?: boolean, playerId?: string) => {
+    const qs = new URLSearchParams();
+    if (host) qs.set("host", "1");
+    if (playerId) qs.set("playerId", playerId);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<{ campaign: Campaign; hostActive?: boolean }>(`/api/campaigns/${encodeURIComponent(id)}${suffix}`);
+  },
   deleteCampaign: (id: string) =>
     request<{ success: boolean }>(`/api/campaigns/${encodeURIComponent(id)}`, { method: "DELETE" }),
   join: (body: Record<string, unknown>) =>
@@ -45,25 +50,36 @@ export const api = {
  * relaxed when the table is idle. Pass host=true so the server records the
  * TV heartbeat (used to gate mid-session joins).
  */
-export function useCampaignPoll(campaignId: string | null, host: boolean) {
+export function useCampaignPoll(campaignId: string | null, host: boolean, playerId?: string) {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [lost, setLost] = useState(false);
+  // A transient state between the first failed poll and giving up (>4). Lets the
+  // UI show "Reconnecting…" and auto-resume instead of flashing "unreachable".
+  const [reconnecting, setReconnecting] = useState(false);
+  const [hostActive, setHostActive] = useState(true);
   const campaignRef = useRef<Campaign | null>(null);
   const failures = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!campaignId) return;
     try {
-      const { campaign: next } = await api.getCampaign(campaignId, host);
+      const { campaign: next, hostActive: hostUp } = await api.getCampaign(campaignId, host, playerId);
       failures.current = 0;
       campaignRef.current = next;
       setCampaign(next);
       setLost(false);
+      setReconnecting(false);
+      setHostActive(hostUp !== false);
     } catch {
       failures.current += 1;
-      if (failures.current > 4) setLost(true);
+      if (failures.current > 4) {
+        setLost(true);
+        setReconnecting(false);
+      } else {
+        setReconnecting(true);
+      }
     }
-  }, [campaignId, host]);
+  }, [campaignId, host, playerId]);
 
   useEffect(() => {
     if (!campaignId) return;
@@ -86,7 +102,7 @@ export function useCampaignPoll(campaignId: string | null, host: boolean) {
     };
   }, [campaignId, host, refresh]);
 
-  return { campaign, refresh, lost };
+  return { campaign, refresh, lost, reconnecting, hostActive };
 }
 
 export type StoredSeat = {

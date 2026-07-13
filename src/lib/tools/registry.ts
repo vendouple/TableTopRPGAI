@@ -4,8 +4,9 @@ import { generateImage } from "@/lib/aqua/images";
 import { getCurrentDate } from "./date";
 import { rollD20Mode, rollDice, judgeD20Outcome, difficultyDcBias } from "./dice";
 import type { AquaToolDefinition } from "@/lib/aqua/client";
-import { AmbienceMood, PlayerStat, StageEffectKind } from "@/lib/campaign/types";
+import { AmbienceMood, PlayerStat, StageEffectKind, StoryCharacter } from "@/lib/campaign/types";
 import { MUSIC_THEMES, MusicTheme } from "@/lib/campaign/musicTheme";
+import { startCombat, endCombat } from "@/lib/campaign/turns";
 
 export const toolDefinitions: AquaToolDefinition[] = [
   {
@@ -145,20 +146,22 @@ export const toolDefinitions: AquaToolDefinition[] = [
                 abilities: { type: "array", items: { type: "string" } },
                 notes: { type: "string" },
                 characterName: { type: "string" },
-                status: { type: "string" },
+                status: { type: "string", description: "Free-text flavor line (e.g. 'Bleeding', 'Ready')." },
+                conditions: { type: "array", items: { type: "string" }, description: "Structured conditions, e.g. ['stunned'] or ['dead']. Drives who can act." },
+                canAct: { type: "boolean", description: "Set false when the player is stunned/incapacitated/dead and cannot act; true to restore. Their controller is hard-locked while false." },
                 portraitUrl: { type: "string" },
                 portraitPrompt: { type: "string" },
                 color: { type: "string", description: "Color name or hex code (e.g. 'orange', '#00ffcc') for dialogue and cards." },
                 stats: {
                   type: "array",
-                  description: "Update HP and other tracked stats. ALWAYS apply damage/healing here after combat or harm.",
+                  description: "Update HP and other tracked stats. ALWAYS apply damage/healing here after combat or harm. maxValue optional (kept if omitted).",
                   items: {
                     type: "object",
-                    required: ["name", "value", "maxValue"],
+                    required: ["name", "value"],
                     properties: {
                       name: { type: "string" },
                       value: { type: "number" },
-                      maxValue: { type: "number" },
+                      maxValue: { type: "number", description: "Optional — omit to keep the existing max." },
                       color: { type: "string" }
                     }
                   }
@@ -178,18 +181,24 @@ export const toolDefinitions: AquaToolDefinition[] = [
                 description: { type: "string" },
                 portraitUrl: { type: "string" },
                 status: { type: "string" },
+                conditions: { type: "array", items: { type: "string" }, description: "Structured conditions, e.g. ['stunned']." },
+                canAct: { type: "boolean", description: "False when this enemy/NPC cannot act (stunned/downed/dead)." },
+                isGroup: { type: "boolean", description: "TRUE only for faceless rank-and-file pooled into one card (e.g. 'Gang Members', 'Guards'). NEVER for a named/role NPC (leader, lieutenant) — those are their own card." },
+                count: { type: "number", description: "For a group: how many are still standing. Decrement as they fall." },
+                maxCount: { type: "number", description: "For a group: the size at first encounter (for the 'N left / M' display)." },
                 color: { type: "string", description: "Color name or hex code (e.g. 'red', '#ff4444') for dialogue and cards." },
                 inventory: { type: "array", items: { type: "string" } },
                 abilities: { type: "array", items: { type: "string" } },
                 stats: {
                   type: "array",
+                  description: "Enemy/NPC HP and stats. Seed HP the moment a foe appears so hits have something to subtract. maxValue optional (kept if omitted).",
                   items: {
                     type: "object",
-                    required: ["name", "value", "maxValue"],
+                    required: ["name", "value"],
                     properties: {
                       name: { type: "string" },
                       value: { type: "number" },
-                      maxValue: { type: "number" },
+                      maxValue: { type: "number", description: "Optional — omit to keep the existing max." },
                       color: { type: "string" }
                     }
                   }
@@ -280,6 +289,31 @@ export const toolDefinitions: AquaToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "start_combat",
+      description: "Enter SEQUENTIAL COMBAT: players act one at a time in initiative order, then the enemies act, then the round repeats. Call this when a fight begins. Outside combat the table is in free 'exploration' where everyone acts at once. Only the active player's controller is unlocked during combat.",
+      parameters: {
+        type: "object",
+        properties: {
+          order: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional initiative order as player names or ids. Omit to use the current party order. Enemies act automatically after the last player each round."
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "end_combat",
+      description: "Leave combat and return to free exploration (everyone acts simultaneously again). Call when the fight is over — enemies dead, fled, or the party disengaged.",
+      parameters: { type: "object", properties: {} }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "generate_image",
       description: "Generate a cinematic scene background, a player portrait, or an NPC portrait. Scene images become the TV backdrop; portraits attach to the player (playerId) or NPC (npcName) they belong to.",
       parameters: {
@@ -343,6 +377,29 @@ export async function runTool(campaignId: string, name: string, args: Record<str
     }
 
     if (name === "get_date") return getCurrentDate();
+
+    if (name === "start_combat") {
+      const campaign = await getCampaign(campaignId);
+      const rawOrder = Array.isArray(args.order) ? (args.order as unknown[]).map(String) : undefined;
+      const ids = rawOrder
+        ?.map((tok) => {
+          const p = campaign.players.find(
+            (pl) => pl.id === tok || (pl.characterName || pl.name).toLowerCase() === tok.toLowerCase()
+          );
+          return p?.id;
+        })
+        .filter((x): x is string => !!x);
+      startCombat(campaign, ids && ids.length ? ids : undefined);
+      await saveCampaign(campaign);
+      return { ok: true, mode: "combat", order: campaign.turnState?.order, activeId: campaign.turnState?.activeId };
+    }
+
+    if (name === "end_combat") {
+      const campaign = await getCampaign(campaignId);
+      endCombat(campaign);
+      await saveCampaign(campaign);
+      return { ok: true, mode: "exploration" };
+    }
 
     if (name === "set_ambience") {
       const moods: AmbienceMood[] = ["calm", "tense", "adrenaline", "battle", "boss", "mystery", "dread", "triumph", "wonder", "somber", "outro"];
@@ -462,6 +519,7 @@ export async function runTool(campaignId: string, name: string, args: Record<str
           if (typeof update.portraitUrl === "string" && isValidImageUrl(update.portraitUrl)) player.portraitUrl = update.portraitUrl;
           if (typeof update.portraitPrompt === "string") player.portraitPrompt = update.portraitPrompt;
           if (typeof update.color === "string") player.color = update.color;
+          applyConditionFields(player, update);
           if (Array.isArray(update.stats)) {
             player.stats = mergeStats(player.stats, update.stats);
           }
@@ -482,11 +540,13 @@ export async function runTool(campaignId: string, name: string, args: Record<str
             if (typeof update.color === "string") char.color = update.color;
             if (Array.isArray(update.inventory)) char.inventory = update.inventory.map(String);
             if (Array.isArray(update.abilities)) char.abilities = update.abilities.map(String);
+            applyNpcGroupFields(char, update);
+            applyConditionFields(char, update);
             if (Array.isArray(update.stats)) {
               char.stats = mergeStats(char.stats, update.stats);
             }
           } else {
-            campaign.storyCharacters.push({
+            const npc: StoryCharacter = {
               id: String(update.id || createId("character")),
               name: String(update.name || "NPC"),
               description: String(update.description || ""),
@@ -496,7 +556,10 @@ export async function runTool(campaignId: string, name: string, args: Record<str
               inventory: Array.isArray(update.inventory) ? update.inventory.map(String) : [],
               abilities: Array.isArray(update.abilities) ? update.abilities.map(String) : [],
               stats: Array.isArray(update.stats) ? mergeStats([], update.stats) : []
-            });
+            };
+            applyNpcGroupFields(npc, update);
+            applyConditionFields(npc, update);
+            campaign.storyCharacters.push(npc);
           }
         }
       }
@@ -600,6 +663,25 @@ function stripSuggestedActions(text: string) {
     .trim();
 }
 
+/** Apply group/mob fields (count, maxCount, isGroup) to an NPC from an update. */
+export function applyNpcGroupFields(char: StoryCharacter, update: Record<string, any>) {
+  if (typeof update.isGroup === "boolean") char.isGroup = update.isGroup;
+  const count = Number(update.count);
+  if (Number.isFinite(count) && count >= 0) char.count = Math.round(count);
+  const maxCount = Number(update.maxCount);
+  if (Number.isFinite(maxCount) && maxCount >= 0) char.maxCount = Math.round(maxCount);
+  // Seed maxCount from the first count we see so "N left / M" reads correctly.
+  if (char.count !== undefined && char.maxCount === undefined) char.maxCount = char.count;
+  // A count that isn't exactly 1 implies a group unless told otherwise.
+  if (char.isGroup === undefined && char.count !== undefined && char.count !== 1) char.isGroup = true;
+}
+
+/** Apply structured combat conditions + the canAct gate to a player or NPC. */
+export function applyConditionFields(entity: { conditions?: string[]; canAct?: boolean }, update: Record<string, any>) {
+  if (Array.isArray(update.conditions)) entity.conditions = update.conditions.map(String);
+  if (typeof update.canAct === "boolean") entity.canAct = update.canAct;
+}
+
 function mergeStats(currentStats: PlayerStat[] | undefined, incomingStats: any[]): PlayerStat[] {
   const merged = Array.isArray(currentStats) ? [...currentStats] : [];
   for (const s of incomingStats) {
@@ -607,13 +689,19 @@ function mergeStats(currentStats: PlayerStat[] | undefined, incomingStats: any[]
     const name = String(s.name || "").trim();
     if (!name) continue;
     const value = Number(s.value);
-    const maxValue = Number(s.maxValue);
-    if (!Number.isFinite(value) || !Number.isFinite(maxValue)) continue;
+    if (!Number.isFinite(value)) continue; // value is the one field we truly need
+    const incomingMax = Number(s.maxValue);
     const color = typeof s.color === "string" ? s.color : undefined;
     const idx = merged.findIndex((stat) => stat.name.toLowerCase() === name.toLowerCase());
-    const next = { name, value, maxValue, color };
-    if (idx >= 0) merged[idx] = { ...merged[idx], ...next };
-    else merged.push(next);
+    if (idx >= 0) {
+      const prev = merged[idx];
+      // maxValue omitted → keep the existing max rather than dropping the stat.
+      const maxValue = Number.isFinite(incomingMax) && incomingMax > 0 ? incomingMax : prev.maxValue;
+      merged[idx] = { name: prev.name, value, maxValue, color: color ?? prev.color };
+    } else {
+      const maxValue = Number.isFinite(incomingMax) && incomingMax > 0 ? incomingMax : (value > 0 ? value : 10);
+      merged.push({ name, value, maxValue, color });
+    }
   }
   return merged;
 }

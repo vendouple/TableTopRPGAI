@@ -625,7 +625,9 @@ export default function HostStage({
   const npcsOnStage = useMemo(
     () =>
       campaign.storyCharacters
-        .filter((npc) => npc.portraitUrl && npc.status !== "Future NPC")
+        // Show a foe the moment it appears — a portrait OR any tracked stat
+        // (HP) is enough; enemies shouldn't be invisible until art is painted.
+        .filter((npc) => (npc.portraitUrl || (npc.stats && npc.stats.length > 0)) && npc.status !== "Future NPC")
         .slice(-4),
     [campaign.storyCharacters]
   );
@@ -736,6 +738,12 @@ export default function HostStage({
           <span className="stage-title">{campaign.title}</span>
           {questLine ? <span className="stage-quest">⟡ {questLine}</span> : null}
         </div>
+        {campaign.turnState?.mode === "combat" ? (
+          <span className="stage-combat-badge">
+            ⚔ Combat{campaign.turnState.round ? ` · Round ${campaign.turnState.round}` : ""}
+            {campaign.turnState.activeId === "enemies" ? " · Enemies act" : ""}
+          </span>
+        ) : null}
         {campaign.ambience?.note ? <span className="stage-ambience-note">{campaign.ambience.note}</span> : null}
       </header>
 
@@ -745,8 +753,10 @@ export default function HostStage({
           const color = accentColor(player.color);
           const hp = player.stats.find((stat) => stat.name.toUpperCase() === "HP");
           const speaking = currentBeat?.playerId === player.id;
+          const activeTurn = campaign.turnState?.mode === "combat" && campaign.turnState?.activeId === player.id;
+          const down = player.canAct === false;
           return (
-            <div key={player.id} className={`rail-card ${speaking ? "speaking" : ""}`} style={{ borderColor: `${color}` }}>
+            <div key={player.id} className={`rail-card ${speaking ? "speaking" : ""} ${activeTurn ? "active-turn" : ""} ${down ? "downed" : ""}`} style={{ borderColor: `${color}` }}>
               <div className="rail-portrait">
                 {player.portraitUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -756,7 +766,9 @@ export default function HostStage({
                 )}
               </div>
               <div className="rail-info">
-                <span className="rail-name" style={{ color }}>{player.characterName || player.name}</span>
+                <span className="rail-name" style={{ color }}>
+                  {activeTurn ? "▶ " : ""}{player.characterName || player.name}
+                </span>
                 {hp ? (
                   <span className="rail-hp">
                     <span className="rail-hp-fill" style={{ width: `${Math.max(0, Math.min(100, (hp.value / Math.max(hp.maxValue, 1)) * 100))}%` }} />
@@ -775,14 +787,32 @@ export default function HostStage({
         {npcsOnStage.map((npc: StoryCharacter) => {
           const color = accentColor(npc.color, "#9aa4c0");
           const speaking = currentBeat?.speaker === npc.name;
+          const hp = (npc.stats || []).find((stat) => stat.name.toUpperCase() === "HP");
+          const isGroup = npc.isGroup || (npc.count !== undefined && npc.count !== 1);
+          const remaining = npc.count;
           return (
             <div key={npc.id} className={`rail-card npc ${speaking ? "speaking" : ""}`} style={{ borderColor: color }}>
               <div className="rail-portrait">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={npc.portraitUrl!} alt={npc.name} />
+                {npc.portraitUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={npc.portraitUrl} alt={npc.name} />
+                ) : (
+                  <span className="forge-circle small" aria-hidden />
+                )}
               </div>
               <div className="rail-info">
-                <span className="rail-name" style={{ color }}>{npc.name}</span>
+                <span className="rail-name" style={{ color }}>
+                  {npc.name}{isGroup && remaining !== undefined ? ` ×${remaining}` : ""}
+                </span>
+                {hp ? (
+                  <span className="rail-hp">
+                    <span className="rail-hp-fill" style={{ width: `${Math.max(0, Math.min(100, (hp.value / Math.max(hp.maxValue, 1)) * 100))}%` }} />
+                    <span className="rail-hp-text">{hp.value}/{hp.maxValue}</span>
+                  </span>
+                ) : null}
+                {isGroup && remaining !== undefined ? (
+                  <span className="rail-status">{remaining} left{npc.maxCount ? ` / ${npc.maxCount}` : ""}</span>
+                ) : null}
                 {npc.status ? <span className="rail-status">{npc.status}</span> : null}
               </div>
             </div>

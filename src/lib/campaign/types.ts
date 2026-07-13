@@ -62,6 +62,17 @@ export type Player = {
   notes: string;
   stats: PlayerStat[];
   color?: string;
+  /**
+   * Structured conditions and the enforced action gate. `status` remains a
+   * free-text flavor line; `canAct === false` (dead/incapacitated/stunned)
+   * hard-disables this player's controller for the turn. Undefined = able.
+   */
+  conditions?: string[];
+  canAct?: boolean;
+  /** Presence (Phase 5): last time this player's controller polled, ms epoch. */
+  lastSeenAt?: number;
+  /** True once the player explicitly left (or timed out and was woven out). */
+  away?: boolean;
 };
 
 export type StoryCharacter = {
@@ -75,11 +86,60 @@ export type StoryCharacter = {
   inventory?: string[];
   abilities?: string[];
   color?: string;
+  /**
+   * Group/mob support: when isGroup is true this NPC card represents a pool of
+   * faceless rank-and-file (e.g. "Gang Members"), NOT a named individual.
+   * `count` is how many are still standing; `maxCount` the size at first
+   * encounter. Named/role NPCs (leader, lieutenant) are always their own
+   * non-group card. The TV/controller show "×count" + "count left".
+   */
+  isGroup?: boolean;
+  count?: number;
+  maxCount?: number;
+  /**
+   * Structured combat conditions (Phase 3). Free-text `status` stays for
+   * flavor; `canAct` is the enforced gate. A dead/incapacitated/stunned
+   * combatant cannot act on its turn.
+   */
+  conditions?: string[];
+  canAct?: boolean;
 };
 
 export type SuggestedAction = {
   title: string;
   prompt: string;
+};
+
+/**
+ * One player's locked-in choice during an exploration round (simultaneous
+ * lock-in). Cleared when the round resolves.
+ */
+export type PendingAction = {
+  action: string;
+  display?: string;
+  actionId?: string;
+  /** Set when the player opted into a shared "together" action (its index). */
+  partyActionId?: string;
+  lockedAt: string;
+};
+
+/**
+ * Turn state for the two-mode turn system (#1):
+ *   exploration – simultaneous lock-in: everyone picks, then one combined
+ *                 resolution. No per-player freeze; controllers say "waiting".
+ *   combat      – sequential initiative: activeId acts, resolves, next, then
+ *                 the enemies act, then loop. Others are locked to "not your turn".
+ */
+export type TurnState = {
+  mode: "exploration" | "combat";
+  /** Combat only: initiative order of player ids. */
+  order?: string[];
+  /** Combat only: whose turn it is now (a player id), or "enemies" for the NPC phase. */
+  activeId?: string;
+  /** Combat only: 1-based round counter. */
+  round?: number;
+  /** ISO deadline for the current turn/round; past it, idle/absent actors are skipped. */
+  deadlineAt?: string;
 };
 
 export type MessageSegment = {
@@ -249,6 +309,10 @@ export type Campaign = {
   suggestedActions: SuggestedAction[];
   playerActions: Record<string, SuggestedAction[]>;
   partyActions: SuggestedAction[];
+  /** Two-mode turn system (#1). Undefined = legacy free-for-all (treated as exploration). */
+  turnState?: TurnState;
+  /** Exploration lock-ins awaiting a combined resolution, keyed by playerId. */
+  pendingActions?: Record<string, PendingAction>;
   memory: string;
   images: SceneImage[];
   portraits: PortraitImage[];

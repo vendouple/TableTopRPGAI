@@ -11,12 +11,14 @@ import {
   Difficulty,
   DisplayEvent,
   EndingKind,
+  PendingAction,
   Player,
   RollMode,
   StageEffect,
   StageEffectKind,
   StoryCharacter,
-  SuggestedAction
+  SuggestedAction,
+  TurnState
 } from "./types";
 import { createId, createJoinCode } from "@/lib/utils/ids";
 import { classifyMusicTheme, MUSIC_THEMES, MusicTheme } from "./musicTheme";
@@ -32,6 +34,50 @@ export function recordHostHeartbeat(campaignId: string) {
 export function isHostHeartbeatActive(campaignId: string): boolean {
   const lastActive = activeHosts.get(campaignId);
   return lastActive ? (Date.now() - lastActive < 15000) : false;
+}
+
+// Per-player presence, in-memory (globalThis) so a poll doesn't hit disk. A
+// player is "away" only once we've SEEN them and then lost them past the
+// window; no record at all is treated as present (grace for fresh joins / after
+// a server restart), so we never falsely skip someone who simply hasn't polled.
+const PLAYER_AWAY_MS = Math.max(8000, Number(process.env.PLAYER_AWAY_MS) || 20000);
+const activePlayers: Map<string, number> = ((globalThis as any).activePlayers ??= new Map<string, number>());
+
+export function recordPlayerHeartbeat(campaignId: string, playerId: string) {
+  if (!campaignId || !playerId) return;
+  activePlayers.set(`${campaignId}:${playerId}`, Date.now());
+}
+
+export function playerLastSeen(campaignId: string, playerId: string): number | undefined {
+  return activePlayers.get(`${campaignId}:${playerId}`);
+}
+
+export function isPlayerPresent(campaignId: string, playerId: string): boolean {
+  const seen = activePlayers.get(`${campaignId}:${playerId}`);
+  if (seen === undefined) return true; // never-seen = grace (present)
+  return Date.now() - seen <= PLAYER_AWAY_MS;
+}
+
+/**
+ * Reflect live presence into each player's `away` flag (used by the turn system
+ * to skip disconnected players). Returns the ids that FLIPPED to away this pass
+ * and those that flipped back, so callers can weave the transition into the story.
+ */
+export function reconcilePresence(campaign: Campaign): { wentAway: string[]; returned: string[] } {
+  const wentAway: string[] = [];
+  const returned: string[] = [];
+  for (const player of campaign.players) {
+    const present = isPlayerPresent(campaign.id, player.id);
+    const wasAway = player.away === true;
+    if (!present && !wasAway) {
+      player.away = true;
+      wentAway.push(player.id);
+    } else if (present && wasAway) {
+      player.away = false;
+      returned.push(player.id);
+    }
+  }
+  return { wentAway, returned };
 }
 
 class Mutex {
@@ -340,6 +386,8 @@ function normalizeCampaign(raw: Partial<Campaign> & { suggestedActions?: unknown
     suggestedActions,
     playerActions: normalizePlayerActions(raw.playerActions, players, suggestedActions, !isCampaignActive && status !== "completed"),
     partyActions: normalizeOptionalSuggestedActions(raw.partyActions),
+    turnState: normalizeTurnState((raw as any).turnState),
+    pendingActions: normalizePendingActions((raw as any).pendingActions),
     memory: String(raw.memory || ""),
     images: Array.isArray(raw.images) ? raw.images : [],
     portraits: Array.isArray(raw.portraits) ? raw.portraits : [],
@@ -485,6 +533,8 @@ export function endCampaign(
   campaign.suggestedActions = [];
   campaign.partyActions = [];
   campaign.playerActions = {};
+  campaign.turnState = { mode: "exploration" };
+  campaign.pendingActions = {};
   for (const player of campaign.players) {
     campaign.playerActions[player.id] = [];
   }
@@ -516,7 +566,12 @@ function normalizeStoryCharacter(char: any): StoryCharacter {
       maxValue: Number(s.maxValue ?? 10),
       color: s.color ? String(s.color) : undefined
     })) : [],
-    color: char.color ? String(char.color) : undefined
+    color: char.color ? String(char.color) : undefined,
+    isGroup: char.isGroup === true || undefined,
+    count: Number.isFinite(Number(char.count)) ? Math.max(0, Math.round(Number(char.count))) : undefined,
+    maxCount: Number.isFinite(Number(char.maxCount)) ? Math.max(0, Math.round(Number(char.maxCount))) : undefined,
+    conditions: Array.isArray(char.conditions) ? char.conditions.map(String) : undefined,
+    canAct: typeof char.canAct === "boolean" ? char.canAct : undefined
   };
 }
 
@@ -542,7 +597,11 @@ function normalizePlayer(player: Partial<Player>, now: string): Player {
     })) : [
       { name: "HP", value: 20, maxValue: 20, color: "red" }
     ],
-    color: player.color ? String(player.color) : undefined
+    color: player.color ? String(player.color) : undefined,
+    conditions: Array.isArray(player.conditions) ? player.conditions.map(String) : undefined,
+    canAct: typeof player.canAct === "boolean" ? player.canAct : undefined,
+    lastSeenAt: Number.isFinite(Number(player.lastSeenAt)) ? Number(player.lastSeenAt) : undefined,
+    away: typeof player.away === "boolean" ? player.away : undefined
   };
 }
 
@@ -592,6 +651,35 @@ function normalizeSuggestedActions(actions: unknown[] | undefined, useFallback =
 function normalizeOptionalSuggestedActions(actions: unknown[] | undefined): SuggestedAction[] {
   if (!Array.isArray(actions) || actions.length === 0) return [];
   return normalizeSuggestedActions(actions, false);
+}
+
+function normalizeTurnState(raw: any): TurnState | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const mode = raw.mode === "combat" ? "combat" : "exploration";
+  return {
+    mode,
+    order: Array.isArray(raw.order) ? raw.order.map(String) : undefined,
+    activeId: typeof raw.activeId === "string" ? raw.activeId : undefined,
+    round: Number.isFinite(Number(raw.round)) ? Math.max(0, Math.round(Number(raw.round))) : undefined,
+    deadlineAt: typeof raw.deadlineAt === "string" ? raw.deadlineAt : undefined
+  };
+}
+
+function normalizePendingActions(raw: any): Record<string, PendingAction> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, PendingAction> = {};
+  for (const [pid, val] of Object.entries(raw)) {
+    const v = val as any;
+    if (!v || typeof v !== "object" || typeof v.action !== "string") continue;
+    out[pid] = {
+      action: v.action,
+      display: typeof v.display === "string" ? v.display : undefined,
+      actionId: typeof v.actionId === "string" ? v.actionId : undefined,
+      partyActionId: typeof v.partyActionId === "string" ? v.partyActionId : undefined,
+      lockedAt: typeof v.lockedAt === "string" ? v.lockedAt : new Date().toISOString()
+    };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export async function readCampaignTextFile(campaignId: string, filePath: string) {

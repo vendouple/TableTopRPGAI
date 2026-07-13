@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { runDungeonMaster, serverLog, serverError } from "@/lib/aqua/chat";
-import { getCampaign, getCampaignLock, saveCampaign, safePushDisplayEvent } from "@/lib/campaign/store";
-import { createId } from "@/lib/utils/ids";
+import { runDungeonMaster, resolveExplorationRound, advanceCombatAndRunEnemies, serverLog, serverError } from "@/lib/aqua/chat";
+import { getCampaign, getCampaignLock, saveCampaign, safePushDisplayEvent, reconcilePresence } from "@/lib/campaign/store";
+import { turnMode, allLockedIn, armExplorationDeadline } from "@/lib/campaign/turns";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,13 @@ export async function POST(request: Request) {
       const player = campaign.players.find((item) => item.id === playerId);
       if (!player) return NextResponse.json({ error: "Player not found" }, { status: 404 });
       const playerName = player.characterName || player.name;
+
+      // Lifecycle guard (#8/#15): a stunned/incapacitated/dead player cannot act.
+      // The controller already hard-locks; this rejects any stale/forced submit.
+      if (player.canAct === false) {
+        serverLog("Action Guard", `Rejected action from ${playerName}: canAct=false (${player.status || "incapacitated"})`);
+        return NextResponse.json({ campaign, blocked: "cannot-act" });
+      }
 
       const actionId = body.actionId ? String(body.actionId) : undefined;
 
@@ -45,7 +52,52 @@ export async function POST(request: Request) {
       }
 
       const displayAction = body.displayAction ? String(body.displayAction) : undefined;
-      return NextResponse.json(await runDungeonMaster(campaignId, playerName, action, { playerId, displayAction, actionId }));
+      const partyActionId = body.partyActionId ? String(body.partyActionId) : undefined;
+
+      // Presence reconcile (#2): mark disconnected players away so they don't
+      // block a round, and weave the transition into the timeline.
+      const presence = reconcilePresence(campaign);
+      for (const id of presence.wentAway) {
+        const p = campaign.players.find((x) => x.id === id);
+        if (p) safePushDisplayEvent(campaign, { type: "system", speaker: "SYSTEM", content: `${p.characterName || p.name} slips from the weave — disconnected.` });
+      }
+      for (const id of presence.returned) {
+        const p = campaign.players.find((x) => x.id === id);
+        if (p) safePushDisplayEvent(campaign, { type: "system", speaker: "SYSTEM", content: `${p.characterName || p.name} returns to the table.` });
+      }
+      if (presence.wentAway.length || presence.returned.length) await saveCampaign(campaign);
+
+      // ── Turn model (#1) ──────────────────────────────────────────────
+      if (turnMode(campaign) === "combat") {
+        // Sequential initiative: only the active player may act.
+        if (campaign.turnState?.activeId !== playerId) {
+          serverLog("Turn Guard", `Rejected ${playerName}'s action — not their turn (active=${campaign.turnState?.activeId}).`);
+          return NextResponse.json({ campaign, blocked: "not-your-turn" });
+        }
+        await runDungeonMaster(campaignId, playerName, action, { playerId, displayAction, actionId });
+        // Advance initiative; run the enemy phase whenever the round wraps.
+        const fresh = await advanceCombatAndRunEnemies(campaignId);
+        return NextResponse.json({ campaign: fresh });
+      }
+
+      // Exploration: record this player's lock-in; resolve the whole round only
+      // once every able + present player has locked in (or a leader forces it).
+      campaign.pendingActions = campaign.pendingActions || {};
+      campaign.pendingActions[playerId] = {
+        action,
+        display: displayAction,
+        actionId,
+        partyActionId,
+        lockedAt: new Date().toISOString()
+      };
+      armExplorationDeadline(campaign);
+      await saveCampaign(campaign);
+
+      if (allLockedIn(campaign)) {
+        const resolved = await resolveExplorationRound(campaignId);
+        return NextResponse.json({ campaign: resolved });
+      }
+      return NextResponse.json({ campaign, locked: true });
     } finally {
       release();
     }
@@ -62,7 +114,7 @@ export async function POST(request: Request) {
           type: "system",
           speaker: "DM Error",
           playerId: player?.id,
-          content: `${speaker}'s action could not be resolved after multiple AI attempts. ${error instanceof Error ? error.message : "Unknown chat error"}`
+          content: `${speaker}'s action couldn't be resolved (the storyteller stumbled). Your previous choices have been restored — try again. ${error instanceof Error ? error.message : "Unknown chat error"}`
         });
         await saveCampaign(campaign);
       } catch (saveError) {

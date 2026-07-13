@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { getCampaign, getCampaignLock, saveCampaign } from "@/lib/campaign/store";
-import { runDungeonMaster, repaintBackdrop, serverLog, serverError } from "@/lib/aqua/chat";
+import { getCampaign, getCampaignLock, saveCampaign, safePushDisplayEvent } from "@/lib/campaign/store";
+import { runDungeonMaster, repaintBackdrop, resolveExplorationRound, advanceCombatAndRunEnemies, serverLog, serverError } from "@/lib/aqua/chat";
+import { turnMode, deadlinePassed } from "@/lib/campaign/turns";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +94,68 @@ export async function POST(request: Request) {
         // Pure visual refresh: the scene-director reuses a fitting past backdrop
         // or paints a fresh one. No story turn, so pending choices are untouched.
         const campaign = await repaintBackdrop(campaignId, { force: true });
+        return NextResponse.json({ campaign });
+      }
+
+      if (action === "resolveRound") {
+        // Force-resolve the current exploration round with whoever locked in.
+        // Triggered by the party leader ("go now") or the host as a deadline
+        // backstop when a player is slow. `auto` = deadline-driven (only fires
+        // if the deadline actually passed) to avoid racing eager clients.
+        const campaign = await getCampaign(campaignId);
+        if (campaign.status !== "active" || turnMode(campaign) !== "exploration") {
+          return NextResponse.json({ campaign });
+        }
+        const pendingCount = Object.keys(campaign.pendingActions || {}).length;
+        if (!pendingCount) return NextResponse.json({ campaign });
+        if (body.auto && !deadlinePassed(campaign)) return NextResponse.json({ campaign });
+        serverLog("API party", `Resolving exploration round for ${campaignId} (${pendingCount} locked in, auto=${!!body.auto})`);
+        const resolved = await resolveExplorationRound(campaignId);
+        return NextResponse.json({ campaign: resolved });
+      }
+
+      if (action === "skipTurn") {
+        // Advance combat past an idle/absent active player. `auto` requires the
+        // turn deadline to have passed (host backstop); a leader may force it.
+        const campaign = await getCampaign(campaignId);
+        if (campaign.status !== "active" || turnMode(campaign) !== "combat") {
+          return NextResponse.json({ campaign });
+        }
+        if (body.auto && !deadlinePassed(campaign)) return NextResponse.json({ campaign });
+        const activeId = campaign.turnState?.activeId;
+        const actor = campaign.players.find((p) => p.id === activeId);
+        if (actor) {
+          safePushDisplayEvent(campaign, {
+            type: "system",
+            speaker: "SYSTEM",
+            content: `${actor.characterName || actor.name} hesitates — the moment slips past.`
+          });
+          await saveCampaign(campaign);
+        }
+        serverLog("API party", `Skipping combat turn for ${campaignId} (active=${activeId}, auto=${!!body.auto})`);
+        const fresh = await advanceCombatAndRunEnemies(campaignId);
+        return NextResponse.json({ campaign: fresh });
+      }
+
+      if (action === "leave") {
+        const campaign = await getCampaign(campaignId);
+        const pid = String(body.playerId || "");
+        const player = campaign.players.find((p) => p.id === pid);
+        if (!player) return NextResponse.json({ campaign });
+        player.away = true;
+        safePushDisplayEvent(campaign, {
+          type: "system",
+          speaker: "SYSTEM",
+          content: `${player.characterName || player.name} steps away from the table.`
+        });
+        // Clear any pending lock-in so they don't hold up an exploration round.
+        if (campaign.pendingActions) delete campaign.pendingActions[pid];
+        await saveCampaign(campaign);
+        // If it was their combat turn, pass initiative on.
+        if (turnMode(campaign) === "combat" && campaign.turnState?.activeId === pid) {
+          const fresh = await advanceCombatAndRunEnemies(campaignId);
+          return NextResponse.json({ campaign: fresh });
+        }
         return NextResponse.json({ campaign });
       }
 
