@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCampaign, getCampaignLock, saveCampaign, safePushDisplayEvent, ensureLocations, getFocusedLocation, getPlayerLocation } from "@/lib/campaign/store";
+import { getCampaign, getCampaignLock, saveCampaign, safePushDisplayEvent, ensureLocations, getFocusedLocation, getPlayerLocation, reconcilePresence, playerLastSeen } from "@/lib/campaign/store";
 import { runDungeonMaster, repaintBackdrop, resolveExplorationRound, advanceCombatAndRunEnemies, serverLog, serverError } from "@/lib/aqua/chat";
 import { turnMode, deadlinePassed, syncFocusedMirror } from "@/lib/campaign/turns";
 
@@ -48,12 +48,13 @@ export async function POST(request: Request) {
             : "Campaign type: standard tabletop RPG, not D&D. Preserve the setup's genre and do not add fantasy/D&D assumptions unless already present.",
           "Do these steps in order:",
           "1. Call generate_image for the opening background, and call update_location to seed the opening scene's objects, cover, exits, hazards, and a few useful narrative zones.",
-          "2. Call write_campaign_file for quest_log.md with only the first active objective and immediate tasks.",
-          "3. If no ending/goal exists, decide hidden high-level win/loss conditions for continuity but do not put them in quest_log.md.",
-          "4. Initialize every joined player with inventory, abilities, status/notes, stats, and phone actions.",
+          "2. Call write_campaign_file for quest_log.md with only the first active objective and immediate tasks, and write_campaign_file for storyline.md with your private arc (chapters, intended ending, 'Current: Chapter 1').",
+          "3. If no ending/goal exists, decide hidden high-level win/loss conditions in storyline.md but do not put them in quest_log.md.",
+          "4. Initialize every joined player with inventory, abilities, status/notes, stats, and phone actions (via update_campaign_state playerUpdates).",
           "5. Add any starting NPCs in npcUpdates. If a new NPC appears, call generate_image for their portrait first.",
-          "6. Return JSON with title, currentScene, overview, opening story, playerActions, and partyActions.",
-          campaign.isRandomized ? "Surprise campaign: choose a creative campaign title and set title." : "",
+          "6. Call set_ambience for the opening scene's mood" + (campaign.musicTheme ? "." : ", and call set_theme ONCE with the campaign's genre score."),
+          "7. END by calling narrate_turn EXACTLY ONCE with the opening story beats, title, currentScene, overview, playerActions, and partyActions. Do not write prose or JSON outside of narrate_turn.",
+          campaign.isRandomized ? "Surprise campaign: invent a creative campaign title and pass it as narrate_turn's title." : "",
           campaign.startingStory.trim() ? `Starting background story to adapt: ${campaign.startingStory}` : "No starting story was provided; adapt the joined player backgrounds into an opening scene."
         ].filter(Boolean).join("\n");
 
@@ -243,6 +244,96 @@ export async function POST(request: Request) {
           content: "The host reset a stalled turn — the table is unstuck."
         });
         await saveCampaign(campaign);
+        return NextResponse.json({ campaign });
+      }
+
+      if (action === "sweepPresence") {
+        // TV-driven presence backstop. Presence normally reconciles only when
+        // someone acts, so a quiet table never notices a vanished phone. The
+        // host sweeps every few seconds: flip timed-out players away, note the
+        // transitions in the chronicle, and — one hero per sweep, never while
+        // another turn runs — weave a departure out of (or a woven-out
+        // returner back into) the story as a background DM turn. The pause
+        // spinner on the TV keys off the dmStatus these turns set.
+        const campaign = await getCampaign(campaignId);
+        if (campaign.status !== "active") return NextResponse.json({ campaign });
+        const storyStarted = campaign.displayEvents.some((e) => e.type === "narration" || e.type === "dialogue");
+        const presence = reconcilePresence(campaign);
+        for (const id of presence.wentAway) {
+          const p = campaign.players.find((x) => x.id === id);
+          if (p) safePushDisplayEvent(campaign, { type: "system", speaker: "SYSTEM", content: `${p.characterName || p.name} slips from the weave — disconnected.` });
+        }
+        for (const id of presence.returned) {
+          const p = campaign.players.find((x) => x.id === id);
+          if (p) safePushDisplayEvent(campaign, { type: "system", speaker: "SYSTEM", content: `${p.characterName || p.name} returns to the table.` });
+        }
+
+        const canWeave = storyStarted && !campaign.dmStatus;
+        // A return weave needs a LIVE heartbeat, not presence's never-seen
+        // grace — after a server restart every phone reads "present" for one
+        // beat, and weaving a still-absent hero back in would be a lie.
+        const beating = (playerId: string) => {
+          const seen = playerLastSeen(campaignId, playerId);
+          return seen !== undefined && Date.now() - seen < 15000;
+        };
+        const returning = canWeave ? campaign.players.find((p) => !p.away && p.wovenOut && beating(p.id)) : undefined;
+        const departed = !returning && canWeave ? campaign.players.find((p) => p.away && !p.wovenOut) : undefined;
+        if (returning) returning.wovenOut = false;
+        if (departed) departed.wovenOut = true;
+        if (presence.wentAway.length || presence.returned.length || returning || departed) {
+          await saveCampaign(campaign);
+        }
+
+        const weaveMessage = returning
+          ? [
+              `Player ${returning.characterName || returning.name} has rejoined the game after being disconnected!`,
+              "Do these steps in order:",
+              "1. Briefly weave their return into the current scene.",
+              "2. Set their status to Active or Ready.",
+              "3. Provide fresh playerActions for them and other active players.",
+              "4. Reuse the current background unless a new image is clearly needed."
+            ].join("\n")
+          : departed
+            ? [
+                `Player ${departed.name} has disconnected from the game and timed out.`,
+                `Their character${departed.characterName ? `, ${departed.characterName},` : ""} must gracefully exit the story for now.`,
+                "Do these steps in order:",
+                "1. Briefly weave their departure into the current scene (one or two in-world beats — no meta talk about phones or connections).",
+                "2. Park the character somewhere safe and recoverable. Do NOT kill them or strip their items; they may return.",
+                "3. Keep playerActions fresh for the remaining active players; give none to the departed hero.",
+                "4. Reuse the current background image."
+              ].join("\n")
+            : null;
+
+        if (weaveMessage) {
+          const hero = (returning || departed)!;
+          const isReturn = !!returning;
+          safeRelease();
+          (async () => {
+            const bgRelease = await getCampaignLock(campaignId).acquire();
+            try {
+              // The world may have moved while we waited on the lock: the
+              // hero may be back (or gone again), or another turn may be
+              // running. Re-check and, when skipping, revert the flag so a
+              // later sweep retries instead of losing the weave forever.
+              const fresh = await getCampaign(campaignId);
+              const live = fresh.players.find((p) => p.id === hero.id);
+              if (!live) return;
+              const stateFlipped = isReturn ? !!live.away : !live.away;
+              if (stateFlipped || fresh.dmStatus) {
+                live.wovenOut = isReturn;
+                await saveCampaign(fresh);
+                return;
+              }
+              serverLog("API party background", `Weaving ${isReturn ? "return" : "departure"} for ${hero.name} in campaign: ${campaignId}`);
+              await runDungeonMaster(campaignId, "SYSTEM", weaveMessage, { hiddenUserMessage: true });
+            } catch (err) {
+              serverError("API party background", `Failed to weave ${isReturn ? "return" : "departure"} for ${hero.name}`, err);
+            } finally {
+              bgRelease();
+            }
+          })();
+        }
         return NextResponse.json({ campaign });
       }
 

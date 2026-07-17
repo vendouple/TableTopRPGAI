@@ -84,6 +84,7 @@ Dice rules (the server rolls — you NEVER pick, predict, or invent numbers; nar
 - Ability fit shifts the DC further: a character whose listed special ability directly covers the task: DC −2 or −3. Specialist task with NO fitting ability/tool: DC +2 to +5.
 - d20Mode "advantage"/"disadvantage" is the DM's discretionary call for a REAL situational swing (high ground, flanking, ambush → advantage; blinded, prone, restrained, terrible footing → disadvantage). Use it sparingly. Having a relevant ability is NOT advantage — that's a DC shift.
 - Only use +N/−N modifiers in notation for real damage math or explicit sheet stats.
+- Keep DCs WINNABLE. A plain d20 tops out at 20, so a base DC in the 20s (or one pushed there by the difficulty bias) is impossible — only a nat 20 could pass. Reserve DC 20 for the very hardest feats, and never set a d20 DC above 20 without a real sheet modifier to match. The server clamps impossible DCs back into the achievable range per difficulty, so pass an honest, beatable number.
 - Outcome spectrum (honor EXACTLY): critical-success (nat 20), strong-success (beat DC by 5+), success, partial-success (miss by 1–4 with a cost — only on easy/medium), failure, hard-failure (miss by 5+), critical-failure (nat 1). On hard/insane, near-misses are full failures (no partials).
 - ENEMY/NPC rolls: call roll_dice with isNpc true and playerName set to the NPC name so the TV dice theater shows them. Chain multiple rolls in one turn for combat (attack → damage, contested checks, multi-enemy).
 - Do NOT restate the roll as a SYSTEM story beat — the TV already animates every roll.
@@ -143,8 +144,10 @@ Cinematic direction:
 
 Campaign endings (win/loss/draw/cliffhanger — can end EARLY):
 - When the story reaches a decisive close — party dead (TPK), villain defeated, escape, total failure, stalemate, or bittersweet resolution — call end_campaign with kind (victory|defeat|bittersweet|escape|draw|cliffhanger), title, summary, optional highlights, optional stats.
+- TOTAL PARTY KILL — the hard rule: the instant the LAST able hero falls (every player at 0 HP or dead/dying/unconscious/incapacitated, canAct:false), the saga is OVER. Do NOT keep narrating the storm/scene, do NOT leave the table frozen with no one able to act, and do NOT wait for another prompt — call end_campaign (kind 'defeat') THAT SAME TURN. A downed party with no one who can act is a finished story; sealing it is your job, not the players'.
 - draw = a true stalemate (neither side prevailed, the conflict exhausted itself). cliffhanger = a deliberate season-finale stop mid-crisis — the reveal lands, the door bursts open, cut to black. Use either whenever it is the most dramatically honest close, not only on wins/losses.
 - Include 3-6 stats for the outro's stats board: mix real tallies (battles survived, NPCs befriended, gold earned) with flavorful ones (lies told, curses ignored). Values may be numbers or short witty phrases.
+- ALSO fill the per-player 'cast' (one entry per player): a short epithet/title they earned, a 1-2 sentence 'fate' of what they did across the saga and how they ended, and optionally 1-3 personal 'stats' (their own tallies — kills, lies, wounds taken). This makes the outro read like end credits with each hero's own line. Invent flavorful deeds from the transcript when exact numbers are unknown.
 - Early endings are valid and preferred over dragging a dead campaign. After end_campaign, write a short final story[] epilogue and stop offering player choices (empty playerActions).
 - end_campaign sets status completed, plays the cinematic outro on the TV, and switches ambience to outro.
 
@@ -348,7 +351,27 @@ type ChatCompletionResponse = {
   message?: AquaMessage;
 };
 
-export async function runDungeonMaster(campaignId: string, playerName: string, action: string, options: { hiddenUserMessage?: boolean; playerId?: string; displayAction?: string; actionId?: string } = {}) {
+/**
+ * A total party kill / wipe: every player is hard-locked out of acting (canAct
+ * false) AND shows a lethal signal (0 HP, or a dead/dying/downed/unconscious
+ * condition). Requiring the lethal signal on top of canAct:false keeps a
+ * one-turn full-party STUN from being mistaken for the end of the saga.
+ */
+function isPartyWiped(campaign: Campaign): boolean {
+  const players = campaign.players;
+  if (!players.length) return false;
+  const lethal = /\b(dead|dying|down(ed)?|killed|slain|deceased|expired|unconscious|incapacitated|knocked\s*out)\b/i;
+  return players.every((p) => {
+    if (p.canAct !== false) return false;
+    const hp = (p.stats || []).find((s) => s.name.toUpperCase() === "HP");
+    if (hp && hp.value <= 0) return true;
+    if ((p.conditions || []).some((c) => lethal.test(c))) return true;
+    if (p.status && lethal.test(p.status)) return true;
+    return false;
+  });
+}
+
+export async function runDungeonMaster(campaignId: string, playerName: string, action: string, options: { hiddenUserMessage?: boolean; playerId?: string; displayAction?: string; actionId?: string; isAutoEnding?: boolean } = {}) {
   await logCampaignDebug(campaignId, `[runDungeonMaster] Called by: ${playerName}. Action: "${action}". Options: ${JSON.stringify(options)}`);
   serverLog("DM START", `Running DM for campaign: ${campaignId} | Player: ${playerName} | Action: "${action}"`);
   const campaign = await getCampaign(campaignId);
@@ -363,12 +386,18 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
   const preTurnSuggestedActions = JSON.parse(JSON.stringify(campaign.suggestedActions || []));
   const isJoin = action.startsWith("A new player has joined") || action.startsWith("A new player joined");
   const isRejoin = action.startsWith("Player ") && action.includes("rejoined");
+  // A disconnect timeout: the presence sweep asks the DM to write the hero
+  // out of the scene. The "lost thread" status is what the TV's pause spinner
+  // (and the sync-flow tool remaps below) key off.
+  const isDepart = !isRejoin && action.startsWith("Player ") && action.includes("disconnected from the game");
   const isInitialStart = action.startsWith("Start the couch campaign now.");
   campaign.dmStatus = isInitialStart
     ? "Preparing the initial scenario..."
     : (isJoin
        ? "Integrating new player profile..."
-       : (isRejoin ? "Reintegrating player..." : "The Dungeon Master is scheming..."));
+       : (isRejoin
+          ? "Reintegrating player..."
+          : (isDepart ? "Weaving a lost thread out of the tale..." : "The Dungeon Master is scheming...")));
   campaign.dmPhase = "signal";
 
   if (!options.hiddenUserMessage) {
@@ -411,16 +440,21 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
       }
     };
 
-    for (let step = 0; step < MAX_DM_STEPS; step += 1) {
+    // The opening turn is the heaviest of the whole saga (background, location
+    // seeding, two campaign files, every player, NPCs + portraits, ambience,
+    // narrate_turn) — give it extra headroom so setup never dies mid-flight.
+    const maxSteps = isInitialStart ? Math.max(MAX_DM_STEPS, 24) : MAX_DM_STEPS;
+
+    for (let step = 0; step < maxSteps; step += 1) {
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Requesting completion...`);
-      serverLog("DM AI Step", `Step ${step + 1}/${MAX_DM_STEPS}: Requesting completion...`);
+      serverLog("DM AI Step", `Step ${step + 1}/${maxSteps}: Requesting completion...`);
       const response = await complete(messages, "auto", [...toolsForTurn({ musicTheme: themeChosen ? "set" : undefined }), narrateTurnTool], interactiveFetch);
       const message = response.choices?.[0]?.message || response.message;
       if (!message) throw new Error("Aqua chat response did not include a message");
       await logCampaignDebug(campaignId, `[AI Step ${step + 1}] Received response: ${JSON.stringify(message)}`);
-      
+
       const toolCalls = normalizeToolCalls(message);
-      serverLog("DM AI Step", `Step ${step + 1}/${MAX_DM_STEPS}: Received response. Tool calls found: ${toolCalls.length}`);
+      serverLog("DM AI Step", `Step ${step + 1}/${maxSteps}: Received response. Tool calls found: ${toolCalls.length}`);
       if (!toolCalls.length) {
         finalMessage = message;
         break;
@@ -432,26 +466,38 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
         // its validated args as the final structured result and stop. Any other
         // tools in the same step are still executed above/below.
         if (call.function.name === "narrate_turn") {
+          let parseError: string | null = null;
           try {
             structuredResult = typeof call.function.arguments === "string"
               ? JSON.parse(call.function.arguments || "{}")
               : (call.function.arguments as Record<string, any>) || {};
           } catch (err) {
-            await logCampaignDebug(campaignId, `[narrate_turn] argument parse failed: ${err}`);
+            parseError = err instanceof Error ? err.message : String(err);
             structuredResult = null;
           }
-          await logCampaignDebug(campaignId, `[Tool Call] narrate_turn (turn terminator)`);
+          // Every tool_call in the pushed assistant message needs a matching
+          // tool result — a dangling id makes strict OpenAI-compatible
+          // endpoints reject the NEXT completion call, which is exactly the
+          // call we need when the model has to retry a malformed narrate_turn.
+          messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: parseError
+              ? JSON.stringify({ error: `narrate_turn arguments were not valid JSON (${parseError}). Call narrate_turn again with valid JSON arguments.` })
+              : JSON.stringify({ ok: true })
+          });
+          await logCampaignDebug(campaignId, `[Tool Call] narrate_turn (turn terminator)${parseError ? ` — argument parse FAILED: ${parseError}` : ""}`);
           continue;
         }
         // Update dmStatus before executing tool
         const current = await getCampaign(campaignId);
         const originalStatus = current.dmStatus || "";
-        const isJoinOrSetup = originalStatus.includes("Integrating") || originalStatus.includes("Preparing") || originalStatus.includes("Reintegrating");
-        
+        const isJoinOrSetup = originalStatus.includes("Integrating") || originalStatus.includes("Preparing") || originalStatus.includes("Reintegrating") || originalStatus.includes("lost thread");
+
         let toolStatus = "";
         let toolPhase: import("@/lib/campaign/types").DmPhase | undefined;
-        
-        const isPlayerSyncFlow = originalStatus.toLowerCase().includes("integrating") || originalStatus.toLowerCase().includes("reintegrating");
+
+        const isPlayerSyncFlow = originalStatus.toLowerCase().includes("integrating") || originalStatus.toLowerCase().includes("reintegrating") || originalStatus.toLowerCase().includes("lost thread");
 
         if (call.function.name === "roll_dice") {
           toolStatus = "Rolling the 20-sided die...";
@@ -556,7 +602,7 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
     }
 
     if (!finalMessage && !structuredResult) {
-      serverError("DM Loop", `Tool loop exceeded maximum steps (${MAX_DM_STEPS}).`);
+      serverError("DM Loop", `Tool loop exceeded maximum steps (${maxSteps}).`);
       throw new Error("Tool loop exceeded maximum steps");
     }
 
@@ -910,6 +956,31 @@ export async function runDungeonMaster(campaignId: string, playerName: string, a
     finishCampaignDraft(campaignId);
     await saveCampaign(latestCampaign);
 
+    // TPK backstop (feedback: "once the party dies the AI is reluctant to call
+    // end_campaign"). When the whole party is down and the DM left the saga
+    // open, the table is frozen — nobody can act and no outro ever plays. Force
+    // ONE more turn whose only job is to seal the ending, so the credits always
+    // fire without a human having to nudge the DM. `isAutoEnding` guards against
+    // recursion if that follow-up turn still doesn't end things.
+    if (
+      !options.isAutoEnding &&
+      latestCampaign.status === "active" &&
+      isPartyWiped(latestCampaign)
+    ) {
+      serverLog("DM END", `TPK detected for ${campaignId} — auto-sealing the saga.`);
+      await logCampaignDebug(campaignId, `[TPK] Whole party down — auto-ending the campaign.`);
+      try {
+        return await runDungeonMaster(
+          campaignId,
+          "Game Master",
+          "The ENTIRE party is down — every player is at 0 HP or dead/dying/unconscious/incapacitated. This is a total party kill: the saga cannot continue and the table is frozen with no one able to act. Call end_campaign NOW (kind 'defeat', or 'bittersweet'/'escape' only if the fiction genuinely supports it) with a fitting title, a 1-3 sentence epilogue, 3-6 highlights, a per-player cast line for each fallen hero, and 3-6 stats. Then narrate a short final epilogue with empty playerActions and offer no further choices.",
+          { hiddenUserMessage: true, isAutoEnding: true }
+        );
+      } catch (autoErr) {
+        serverError("DM END", `TPK auto-end failed for ${campaignId} (non-fatal)`, autoErr);
+      }
+    }
+
     serverLog("DM END", `DM finished successfully for campaign: ${campaignId}`);
     return { campaign: latestCampaign, toolEvents };
   } catch (error) {
@@ -1238,7 +1309,7 @@ export async function chooseCampaignTheme(campaignId: string): Promise<Campaign>
     if (campaign.isRandomized) return campaign;
 
     // Already chosen (e.g. host re-saved) — keep it.
-    if (campaign.musicTheme && MUSIC_THEMES.includes(campaign.musicTheme)) return campaign;
+    if (campaign.musicTheme && MUSIC_THEMES.includes(campaign.musicTheme as MusicTheme)) return campaign;
 
     // Ask the DM AI to pick the genre from the campaign's text.
     const theme = await aiPickTheme(campaign);
@@ -1590,6 +1661,23 @@ export async function runProfileGeneration(campaignId: string, playerId: string)
     throw new Error(`Player not found: ${playerId}`);
   }
 
+  // Idempotency guard. generate_image persists the portrait straight to the
+  // player record, so a portrait already present means a prior run produced a
+  // usable profile. Re-running would risk the model returning an empty or
+  // story-shaped response that gets treated as a failure and clobbers the good
+  // profile back to "Generating profile..." (which freezes the lobby's start
+  // button). Just finalize and return.
+  if (player.portraitUrl) {
+    if (!player.status || player.status === "Generating profile...") {
+      player.status = "Ready";
+    }
+    campaign.dmStatus = undefined;
+    campaign.dmPhase = undefined;
+    await saveCampaign(campaign);
+    serverLog("PROFILE END", `Profile already generated (portrait present) for player: ${playerId}; skipping regeneration.`);
+    return;
+  }
+
   const isSurprise = campaign.isRandomized;
   const isDndCampaign = campaign.campaignType === "dnd";
   const isFullRules = isDndCampaign && campaign.rulesMode === "full";
@@ -1706,14 +1794,29 @@ Return ONLY valid JSON matching this schema. Do not include markdown code fences
   } else if (parsedJson && typeof parsedJson === "object" && (parsedJson.characterName || parsedJson.background || parsedJson.portraitUrl || parsedJson.inventory || parsedJson.stats)) {
     update = parsedJson;
   }
-  if (!update || typeof update !== "object") {
-    throw new Error("Failed to generate player profile details");
-  }
-
   // Apply updates only to the target player
   const latestCampaign = await getCampaign(campaignId);
   const targetPlayer = latestCampaign.players.find(p => p.id === playerId);
   if (!targetPlayer) throw new Error("Target player disappeared from campaign during generation");
+
+  if (!update || typeof update !== "object") {
+    // generate_image (called earlier in the loop) already persisted the portrait
+    // directly to the player record, so a portrait here means the run produced a
+    // usable character even though the model returned prose or story-shaped JSON
+    // without the playerUpdates wrapper. Salvage it instead of hard-failing and
+    // leaving the player frozen on "Generating profile...".
+    if (targetPlayer.portraitUrl) {
+      if (!targetPlayer.status || targetPlayer.status === "Generating profile...") {
+        targetPlayer.status = "Ready";
+      }
+      latestCampaign.dmStatus = undefined;
+      latestCampaign.dmPhase = undefined;
+      await saveCampaign(latestCampaign);
+      serverLog("PROFILE END", `Salvaged profile for player ${playerId}: portrait present but model omitted playerUpdates.`);
+      return;
+    }
+    throw new Error("Failed to generate player profile details");
+  }
 
   if (isSurprise && typeof update.characterName === "string") {
     targetPlayer.characterName = update.characterName;

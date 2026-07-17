@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, loadSeat, saveSeat, StoredSeat } from "@/lib/client/api";
 import CosmosCanvas from "@/components/three/CosmosCanvas";
+
+/** Retry cadence while the opening weave still holds the doors shut. */
+const QUEUE_RETRY_MS = 6000;
+const QUEUE_MAX_TRIES = 50;
 
 /**
  * The phone's doorway: enter the table code, then shape (or summon) the
@@ -79,12 +83,23 @@ export default function JoinFlow({
     }
   };
 
-  const takeSeat = async () => {
+  // While the opening weave runs, the server holds the doors: the join either
+  // waits on the campaign lock or answers "currently starting". Either way the
+  // seat is QUEUED here — a patient spinner that retries until the world is
+  // ready — instead of surfacing a scary error at the worst moment.
+  const queueTries = useRef(0);
+  const cancelQueue = useRef(false);
+
+  const takeSeat = async (isRetry = false) => {
     if (!name.trim()) {
       setError("Tell the table your name first.");
       return;
     }
-    setBusy("join");
+    if (!isRetry) {
+      queueTries.current = 0;
+      cancelQueue.current = false;
+      setBusy("join");
+    }
     setError(null);
     try {
       const { campaignId, player, isPartyLeader } = await api.join({
@@ -94,11 +109,22 @@ export default function JoinFlow({
         background: background.trim(),
         personality: personality.trim()
       });
+      if (cancelQueue.current) return;
       const seat: StoredSeat = { campaignId, playerId: player.id, name: player.name, isPartyLeader };
       saveSeat(seat);
       onSeated(seat);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The table refused the seat.");
+      if (cancelQueue.current) return;
+      const message = err instanceof Error ? err.message : "The table refused the seat.";
+      if (/currently starting/i.test(message) && queueTries.current < QUEUE_MAX_TRIES) {
+        queueTries.current += 1;
+        setBusy("queued");
+        setTimeout(() => {
+          if (!cancelQueue.current) takeSeat(true);
+        }, QUEUE_RETRY_MS);
+        return;
+      }
+      setError(message);
       setBusy(null);
     }
   };
@@ -172,9 +198,25 @@ export default function JoinFlow({
             </button>
 
             {error ? <div className="form-error">{error}</div> : null}
-            <button className="summon-button" disabled={busy !== null} onClick={takeSeat}>
-              {busy === "join" ? "Taking your seat…" : "⟡ Take the Seat"}
-            </button>
+            {busy === "queued" ? (
+              <div className="join-queued">
+                <span className="forge-circle small" aria-hidden />
+                <p>The world is still being woven — your seat is saved, and you&apos;ll step in the moment it&apos;s ready.</p>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    cancelQueue.current = true;
+                    setBusy(null);
+                  }}
+                >
+                  Stop waiting
+                </button>
+              </div>
+            ) : (
+              <button className="summon-button" disabled={busy !== null} onClick={() => takeSeat()}>
+                {busy === "join" ? "Taking your seat…" : "⟡ Take the Seat"}
+              </button>
+            )}
           </>
         )}
       </div>

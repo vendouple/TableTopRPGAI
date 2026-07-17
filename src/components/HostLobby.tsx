@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { api, accentColor, Campaign } from "@/lib/client/api";
 import { playSfx } from "@/lib/client/sfx";
-import CosmosCanvas from "@/components/three/CosmosCanvas";
+import WorldForge from "@/components/three/WorldForge";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
 /**
@@ -49,7 +49,9 @@ export default function HostLobby({ campaign, theme }: { campaign: Campaign; the
 
   return (
     <div className="lobby screen" data-music-theme={visual.key}>
-      <CosmosCanvas drama={0.55 + Math.min(campaign.players.length * 0.08, 0.4)} theme={visual.key} />
+      {/* The unforged world: its fragments drift as wireframe ghosts, charging
+          a little brighter with every hero who takes a seat. */}
+      <WorldForge mode="lobby" drama={0.3 + Math.min(campaign.players.length * 0.14, 0.65)} theme={visual.key} />
       <div className="portal-veil" />
 
       <header className="lobby-mast">

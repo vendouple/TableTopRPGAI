@@ -34,6 +34,38 @@ function splitEntry(entry: string): { name: string; detail?: string } {
 }
 
 /**
+ * A live countdown toward a turn/round deadline (turnState.deadlineAt). Ticks
+ * locally twice a second so the bar depletes smoothly between server polls. The
+ * full window length isn't stored on the turn state, so the first remaining
+ * time we observe for a given deadline is treated as ~full — the bar stays
+ * proportionally correct regardless of the server's configured timeout, and a
+ * re-armed deadline (a new timestamp) resets the span.
+ */
+function useTurnCountdown(deadlineAt: string | undefined): { frac: number; seconds: number } | null {
+  const [now, setNow] = useState(() => Date.now());
+  const spanRef = useRef<{ key: string; total: number } | null>(null);
+  useEffect(() => {
+    if (!deadlineAt) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [deadlineAt]);
+  if (!deadlineAt) {
+    spanRef.current = null;
+    return null;
+  }
+  const remaining = new Date(deadlineAt).getTime() - now;
+  if (!spanRef.current || spanRef.current.key !== deadlineAt) {
+    spanRef.current = { key: deadlineAt, total: Math.max(remaining, 1000) };
+  } else if (remaining > spanRef.current.total) {
+    spanRef.current.total = remaining;
+  }
+  const frac = Math.max(0, Math.min(1, remaining / spanRef.current.total));
+  const seconds = Math.max(0, Math.ceil(remaining / 1000));
+  return { frac, seconds };
+}
+
+/**
  * The phone becomes the character's talisman: their portrait and pulse up
  * top, the Weaver's latest words in the middle, and their fate — action
  * cards and a free-form voice — under the thumb.
@@ -88,6 +120,11 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
     : activePlayer ? (activePlayer.characterName || activePlayer.name) : null;
   const lockedIn = !!(me && myLoc?.pendingActions && myLoc.pendingActions[me.id]);
   const pendingCount = myLoc?.pendingActions ? Object.keys(myLoc.pendingActions).length : 0;
+  // Turn-timeout bar: the round/turn auto-resolves at turnState.deadlineAt. Show
+  // a depleting countdown when it's ticking for THIS player — their combat turn,
+  // or an armed exploration round they're part of — so nobody is surprised by a
+  // silent auto-resolve. Hidden while the Weaver is working (deadline is stale).
+  const countdown = useTurnCountdown(myTurnState?.deadlineAt);
   // In combat you must wait for your turn; in exploration everyone may lock in.
   const turnBlocked = isCombat && !myCombatTurn;
   // Split-party: the TV is currently showing another group's scene.
@@ -320,6 +357,19 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                     ? "⚔ Your turn — make your move."
                     : `Waiting — it's ${activeName || "another hero"}'s turn.`}
                 {myTurnState?.round ? <span className="turn-round"> · Round {myTurnState.round}</span> : null}
+              </div>
+            ) : null}
+            {countdown && countdown.seconds > 0 && !locked && canAct &&
+             ((isCombat && myCombatTurn) || (!isCombat && !!myTurnState?.deadlineAt)) ? (
+              <div className={`timeout-bar ${countdown.frac <= 0.25 ? "urgent" : ""}`}>
+                <span className="timeout-bar-fill" style={{ width: `${countdown.frac * 100}%` }} />
+                <span className="timeout-bar-label">
+                  {isCombat
+                    ? `Your turn ends in ${countdown.seconds}s`
+                    : lockedIn
+                      ? `Round resolves in ${countdown.seconds}s`
+                      : `Lock in — ${countdown.seconds}s left`}
+                </span>
               </div>
             ) : null}
             {!canAct ? (

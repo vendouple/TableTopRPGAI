@@ -2,7 +2,7 @@
 import { createId } from "@/lib/utils/ids";
 import { generateImage } from "@/lib/aqua/images";
 import { getCurrentDate } from "./date";
-import { rollD20Mode, rollDice, judgeD20Outcome, difficultyDcBias } from "./dice";
+import { rollD20Mode, rollDice, judgeD20Outcome, difficultyDcBias, clampD20Dc } from "./dice";
 import type { AquaToolDefinition } from "@/lib/aqua/client";
 import { AmbienceMood, PlayerStat, StageEffectKind, StoryCharacter } from "@/lib/campaign/types";
 import type { Location as CampaignLocation } from "@/lib/campaign/types";
@@ -265,7 +265,7 @@ export const toolDefinitions: AquaToolDefinition[] = [
     type: "function",
     function: {
       name: "end_campaign",
-      description: "End the campaign NOW with a decisive result. Call when the story reaches a close — party dead, villain defeated, escape, stalemate, bittersweet resolution, or a deliberate cliffhanger. Can end EARLY (TPK, total failure, sudden victory). Sets status to completed, plays the cinematic outro on the TV, and clears controller actions. After calling this, write a short final story[] epilogue then stop offering player choices.",
+      description: "End the campaign NOW with a decisive result. Call when the story reaches a close — party dead, villain defeated, escape, stalemate, bittersweet resolution, or a deliberate cliffhanger. Can end EARLY (TPK, total failure, sudden victory). The MOMENT the whole party is down (every player at 0 HP / dead / dying / unconscious / incapacitated), you MUST call this the same turn — a downed party with no one able to act is a finished saga; do not keep narrating or wait for a prompt. Sets status to completed, plays the cinematic outro on the TV, and clears controller actions. After calling this, write a short final story[] epilogue then stop offering player choices.",
       parameters: {
         type: "object",
         required: ["kind", "title", "summary"],
@@ -285,6 +285,31 @@ export const toolDefinitions: AquaToolDefinition[] = [
               }
             },
             description: "Optional 3-6 campaign statistics for the outro's stats board. Mix real tallies (battles won, NPCs met) with flavorful ones (curses ignored, taverns wrecked). Values can be numbers or short witty phrases."
+          },
+          cast: {
+            type: "array",
+            description: "Per-player credit lines for the outro's cast reel — ONE entry per player so the ending reads like film end credits. Invent flavorful deeds from the story when exact numbers are unknown.",
+            items: {
+              type: "object",
+              properties: {
+                playerId: { type: "string", description: "The player's id (preferred) so it matches their live sheet/portrait." },
+                name: { type: "string", description: "Character or player name — a fallback when you don't have the id." },
+                title: { type: "string", description: "Epithet/title they earned, e.g. 'The Salt-Blind Prophet' or 'Slayer of the Fat Man'." },
+                fate: { type: "string", description: "1-2 sentences: what they did across the saga and how they ended." },
+                stats: {
+                  type: "array",
+                  description: "Optional 1-3 personal tallies for their card (kills, lies told, wounds taken).",
+                  items: {
+                    type: "object",
+                    required: ["label", "value"],
+                    properties: {
+                      label: { type: "string" },
+                      value: { type: "string" }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -455,6 +480,12 @@ export async function runTool(campaignId: string, name: string, args: Record<str
         dc = Math.max(1, dc + difficultyDcBias(campaign.difficulty));
       }
       const isD20Check = roll.notation.toLowerCase().startsWith("1d20") || !!mode;
+      // A d20 tops out at 20, so a DC in the 20s is only beatable by the nat-20
+      // auto-crit — effectively impossible. Pull the effective DC back into the
+      // winnable range (scaled by difficulty) so every roll has a real chance.
+      if (dc !== undefined && isD20Check) {
+        dc = clampD20Dc(dc, campaign.difficulty, roll.modifier);
+      }
       const natural = isD20Check ? roll.total - roll.modifier : undefined;
       const judged = isD20Check
         ? judgeD20Outcome({ total: roll.total, natural, dc, difficulty: campaign.difficulty })
@@ -661,7 +692,13 @@ export async function runTool(campaignId: string, name: string, args: Record<str
 
     if (name === "set_ambience") {
       const moods: AmbienceMood[] = ["calm", "tense", "adrenaline", "battle", "boss", "mystery", "dread", "triumph", "wonder", "somber", "outro"];
-      const mood = moods.includes(args.mood as AmbienceMood) ? (args.mood as AmbienceMood) : "calm";
+      // An invalid mood used to silently become "calm" — the DM believed it
+      // had set "battle" while the TV played tavern music. Tell it instead.
+      const rawMood = String(args.mood || "").trim().toLowerCase();
+      if (!moods.includes(rawMood as AmbienceMood)) {
+        return { error: `Unknown mood '${String(args.mood)}'. Pick one of: ${moods.join(", ")}.` };
+      }
+      const mood = rawMood as AmbienceMood;
       const rawIntensity = Number(args.intensity ?? 0.6);
       const campaign = await getCampaign(campaignId);
       campaign.ambience = {
@@ -685,7 +722,13 @@ export async function runTool(campaignId: string, name: string, args: Record<str
 
     if (name === "trigger_effect") {
       const kinds: StageEffectKind[] = ["shake", "flash", "embers", "fog", "rain", "snow", "darkness", "heartbeat"];
-      const kind = kinds.includes(args.kind as StageEffectKind) ? (args.kind as StageEffectKind) : "embers";
+      // Same honesty as set_ambience: an unknown kind used to silently fire
+      // "embers" — surface it so the model can correct itself.
+      const rawKind = String(args.kind || "").trim().toLowerCase();
+      if (!kinds.includes(rawKind as StageEffectKind)) {
+        return { error: `Unknown effect kind '${String(args.kind)}'. Pick one of: ${kinds.join(", ")}.` };
+      }
+      const kind = rawKind as StageEffectKind;
       const rawStrength = Number(args.strength ?? 0.6);
       const rawRepeat = Number(args.repeat ?? 1);
       const rawDelay = Number(args.delayMs ?? 0);
@@ -713,7 +756,9 @@ export async function runTool(campaignId: string, name: string, args: Record<str
               label: String(stat?.label || ""),
               value: String(stat?.value ?? "")
             }))
-          : undefined
+          : undefined,
+        // cast is validated/normalized inside endCampaign (per-player credits).
+        cast: args.cast
       });
       await saveCampaign(campaign);
       return { ok: true, ending: campaign.ending };
@@ -760,16 +805,23 @@ export async function runTool(campaignId: string, name: string, args: Record<str
       }
       if (Array.isArray(args.playerActions)) {
         for (const update of args.playerActions as Array<Record<string, unknown>>) {
-          const playerId = String(update.playerId || "");
-          if (!playerId || !campaign.players.some((player) => player.id === playerId)) continue;
-          campaign.playerActions[playerId] = normalizeActions(update.actions).slice(0, 4);
+          // Models routinely send the character/player NAME where the opaque
+          // id belongs (especially on the setup turn) — accept both, else the
+          // actions silently vanish and the controller shows empty cards.
+          const token = String(update.playerId || "");
+          const player =
+            campaign.players.find((p) => p.id === token) ||
+            campaign.players.find((p) => (p.characterName || p.name).toLowerCase() === token.toLowerCase());
+          if (!player) continue;
+          campaign.playerActions[player.id] = normalizeActions(update.actions).slice(0, 4);
         }
       }
       if (Array.isArray(args.playerUpdates)) {
         for (const update of args.playerUpdates as Array<Record<string, unknown>>) {
+          const nameToken = String(update.playerName || update.playerId || "").toLowerCase();
           const player =
             campaign.players.find((item) => item.id === String(update.playerId || "")) ||
-            campaign.players.find((item) => item.name.toLowerCase() === String(update.playerName || "").toLowerCase());
+            campaign.players.find((item) => (item.characterName || item.name).toLowerCase() === nameToken);
           if (!player) continue;
           if (Array.isArray(update.inventory)) player.inventory = update.inventory.map(String);
           if (Array.isArray(update.abilities)) player.abilities = update.abilities.map(String);
@@ -866,10 +918,15 @@ export async function runTool(campaignId: string, name: string, args: Record<str
         if (npcName) {
           let npc = campaign.storyCharacters.find((c) => c.name.toLowerCase() === npcName.toLowerCase());
           if (!npc) {
+            // Portraits are painted BEFORE the NPC is introduced (per the DM
+            // rules), so this is often the character's very first record —
+            // anchor it to the party's location like every other new NPC.
+            ensureLocations(campaign);
             npc = {
               id: createId("character"),
               name: npcName,
               description: "",
+              locationId: getFocusedLocation(campaign).id,
               inventory: [],
               abilities: [],
               stats: []

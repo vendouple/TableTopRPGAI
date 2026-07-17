@@ -79,3 +79,19 @@ export function difficultyDcBias(difficulty?: Difficulty | string): number {
     default: return 0;
   }
 }
+
+/**
+ * The highest EFFECTIVE d20 DC that still leaves a check winnable, per
+ * difficulty. A plain d20 tops out at 20, so any DC above 20 can only be beaten
+ * by the nat-20 auto-crit — i.e. it is effectively impossible. The DM sometimes
+ * stacks "Very Hard 25" + an insane +4 bias into the high 20s; this ceiling
+ * pulls the effective DC back into the possible range so a roll always has a
+ * real chance. Harder difficulties allow a steeper (but never impossible) wall.
+ * `modifier` (real sheet/damage bonuses baked into the notation) raises the
+ * ceiling in lockstep, since the roll's max total is 20 + modifier.
+ */
+export function clampD20Dc(dc: number, difficulty: Difficulty | string | undefined, modifier = 0): number {
+  const ceilByDifficulty: Record<string, number> = { easy: 15, medium: 18, hard: 20, insane: 20 };
+  const ceiling = (ceilByDifficulty[String(difficulty)] ?? 18) + Math.max(0, modifier);
+  return Math.min(dc, ceiling);
+}

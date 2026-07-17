@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import type { AmbienceMood, StageEffectKind } from "@/lib/campaign/types";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
+import { createThemeLayer, themeGutter } from "@/components/three/themeLayers";
 
 export type AtmosphereHandle = {
   /** Fire a one-shot particle surge (embers burst, rain squall, fog roll…). */
@@ -185,6 +186,13 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
       const themeFog = new THREE.Color(visual.fog);
       const tint = visual.key === "none" ? 0 : 0.28;
 
+      // Beyond the tint, each genre gets motion of its own: a constant wind
+      // carried by the theme's dust spec (western sand streams sideways,
+      // fantasy embers rise), plus a signature layer — auroras, warp-lines,
+      // wisps, rain, bokeh, dust, ash — shared with the outro finale.
+      const themeWind: [number, number] = [visual.dust.flow[0] * 1.6, visual.dust.flow[1] * 1.2];
+      const themeLayer = createThemeLayer(scene, visual, { width: 26, height: 18, z: -5 });
+
       const applyMoodColors = () => {
         const recipe = MOODS[moodRef.current.mood] || MOODS.calm;
         colorA.set(recipe.colors[0]).lerp(themeTintA, tint);
@@ -265,21 +273,29 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
             positions[px + 1] = (Math.random() - 0.5) * 16;
           }
           const speed = seeds[i * 2 + 1];
-          positions[px + 1] += drift * speed * dt;
-          positions[px] += Math.sin(t * speed + seeds[i * 2]) * wander * dt;
+          positions[px + 1] += (drift + themeWind[1]) * speed * dt;
+          positions[px] += Math.sin(t * speed + seeds[i * 2]) * wander * dt + themeWind[0] * speed * dt;
           if (positions[px + 1] > 9) positions[px + 1] = -9;
           if (positions[px + 1] < -9) positions[px + 1] = 9;
+          if (positions[px] > 13.5) positions[px] = -13.5;
+          if (positions[px] < -13.5) positions[px] = 13.5;
         }
         geometry.attributes.position.needsUpdate = true;
 
+        // Horror candles gutter, wasteland reactors stutter, noir neon buzzes —
+        // the theme's flicker personality breathes through every light source.
+        const gutter = themeGutter(visual, t);
+
         material.size = recipe.size * (isRain ? 1.6 : 1) + surge * 0.02;
-        material.opacity = recipe.opacity * (0.5 + level * 0.5) + surge * 0.25;
+        material.opacity = (recipe.opacity * (0.5 + level * 0.5) + surge * 0.25) * (0.75 + gutter * 0.25);
 
         rays.forEach((ray, index) => {
           const material = ray.mesh.material as THREE.MeshBasicMaterial;
-          material.opacity = recipe.rays * level * (0.16 + 0.1 * Math.sin(t * 0.22 + ray.seed));
+          material.opacity = recipe.rays * level * (0.16 + 0.1 * Math.sin(t * 0.22 + ray.seed)) * gutter;
           ray.mesh.rotation.z = -0.3 - index * 0.07 + Math.sin(t * 0.08 + ray.seed) * 0.03;
         });
+
+        themeLayer?.update(t, dt, Math.min(1, 0.35 + level * 0.65) * (0.7 + gutter * 0.3));
 
         const fogBoost = surgeKind === "fog" ? surge * 0.5 : 0;
         fogSheets.forEach((sheet, index) => {
@@ -310,6 +326,7 @@ const StageAtmosphere = forwardRef<AtmosphereHandle, { mood: AmbienceMood; inten
           ray.mesh.geometry.dispose();
           (ray.mesh.material as THREE.Material).dispose();
         }
+        themeLayer?.dispose();
         if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
       };
     }, [theme]);

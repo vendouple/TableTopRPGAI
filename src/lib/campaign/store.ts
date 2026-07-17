@@ -10,6 +10,7 @@ import {
   ChatMessage,
   Difficulty,
   DisplayEvent,
+  EndingCastMember,
   EndingKind,
   Location,
   PendingAction,
@@ -520,6 +521,26 @@ function normalizeEndingStats(raw: unknown): CampaignEnding["stats"] {
   return stats.length ? stats : undefined;
 }
 
+function normalizeEndingCast(raw: unknown): EndingCastMember[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const cast = raw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .map((item) => {
+      const member: EndingCastMember = {
+        playerId: typeof item.playerId === "string" && item.playerId.trim() ? item.playerId.trim() : undefined,
+        name: typeof item.name === "string" && item.name.trim() ? item.name.trim() : undefined,
+        title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : undefined,
+        fate: typeof item.fate === "string" && item.fate.trim() ? item.fate.trim() : undefined,
+        stats: normalizeEndingStats(item.stats)?.slice(0, 4)
+      };
+      return member;
+    })
+    // Keep an entry only if it can be matched to a player and carries something.
+    .filter((m) => (m.playerId || m.name) && (m.title || m.fate || m.stats))
+    .slice(0, 12);
+  return cast.length ? cast : undefined;
+}
+
 function normalizeEnding(raw: unknown): CampaignEnding | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const item = raw as Partial<CampaignEnding>;
@@ -534,7 +555,8 @@ function normalizeEnding(raw: unknown): CampaignEnding | undefined {
     highlights: Array.isArray(item.highlights)
       ? item.highlights.map(String).map((h) => h.trim()).filter(Boolean).slice(0, 12)
       : undefined,
-    stats: normalizeEndingStats(item.stats)
+    stats: normalizeEndingStats(item.stats),
+    cast: normalizeEndingCast(item.cast)
   };
 }
 
@@ -617,7 +639,7 @@ export function pushStageEffect(
 /** Seal the campaign with a win/loss/draw/cliffhanger/bittersweet/escape ending and clear controller actions. */
 export function endCampaign(
   campaign: Campaign,
-  payload: { kind: string; title: string; summary: string; highlights?: string[]; stats?: Array<{ label: string; value: string }> }
+  payload: { kind: string; title: string; summary: string; highlights?: string[]; stats?: Array<{ label: string; value: string }>; cast?: unknown }
 ) {
   const kind = ENDING_KINDS.includes(payload.kind as EndingKind) ? (payload.kind as EndingKind) : "bittersweet";
   const title = (payload.title || "The End").trim() || "The End";
@@ -626,9 +648,10 @@ export function endCampaign(
     ? payload.highlights.map(String).map((h) => h.trim()).filter(Boolean).slice(0, 12)
     : undefined;
   const stats = normalizeEndingStats(payload.stats);
+  const cast = normalizeEndingCast(payload.cast);
   const endedAt = new Date().toISOString();
   campaign.status = "completed";
-  campaign.ending = { kind, title, summary, endedAt, highlights, stats };
+  campaign.ending = { kind, title, summary, endedAt, highlights, stats, cast };
   campaign.ambience = {
     mood: "outro",
     intensity: 0.7,
@@ -708,6 +731,7 @@ function normalizePlayer(player: Partial<Player>, now: string): Player {
     canAct: typeof player.canAct === "boolean" ? player.canAct : undefined,
     lastSeenAt: Number.isFinite(Number(player.lastSeenAt)) ? Number(player.lastSeenAt) : undefined,
     away: typeof player.away === "boolean" ? player.away : undefined,
+    wovenOut: typeof player.wovenOut === "boolean" ? player.wovenOut : undefined,
     locationId: player.locationId ? String(player.locationId) : undefined
   };
 }

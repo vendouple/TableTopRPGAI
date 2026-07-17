@@ -60,6 +60,8 @@ export type ThemeVisual = {
     kicker: string;
     join: string;
     reconnect: string;
+    /** A hero's thread is woven out after a disconnect timeout. */
+    depart: string;
     gathering: string;
     joinGathering: string;
   };
@@ -88,6 +90,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The Weaving begins",
       join: "A new hero is woven in",
       reconnect: "A lost thread returns to the loom",
+      depart: "A thread slips loose from the loom",
       gathering: "The threads are gathering…",
       joinGathering: "The loom makes room for another…"
     }
@@ -115,6 +118,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The Weaving begins",
       join: "A new hero is woven in",
       reconnect: "A lost thread returns to the loom",
+      depart: "A thread slips loose from the loom",
       gathering: "The threads are gathering…",
       joinGathering: "The loom makes room for another…"
     }
@@ -142,6 +146,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "Reality compiles",
       join: "A new signal joins the constellation",
       reconnect: "Signal reacquired — re-syncing",
+      depart: "Signal lost — sealing the airlock",
       gathering: "Assembling the starfield…",
       joinGathering: "Docking a new arrival…"
     }
@@ -169,6 +174,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "Something stirs in the dark",
       join: "Another soul wanders in",
       reconnect: "A lost soul claws its way back",
+      depart: "The dark swallows a soul whole",
       gathering: "The shadows are knitting together…",
       joinGathering: "The dark makes room…"
     }
@@ -196,6 +202,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The case file opens",
       join: "A new face walks into the precinct",
       reconnect: "An old face steps back out of the rain",
+      depart: "A silhouette fades into the rain",
       gathering: "Smoke curls under the streetlamp…",
       joinGathering: "Someone new takes a seat in the back…"
     }
@@ -222,6 +229,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The operation goes live",
       join: "A new operative is being briefed",
       reconnect: "Re-establishing the uplink",
+      depart: "An asset goes dark — covering their exit",
       gathering: "Assets are moving into position…",
       joinGathering: "Clearing a new asset…"
     }
@@ -249,6 +257,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The frontier awakens",
       join: "A stranger rides into town",
       reconnect: "A familiar silhouette returns at dusk",
+      depart: "A rider vanishes over the ridge",
       gathering: "Dust rises on the horizon…",
       joinGathering: "Hoofbeats approach the camp…"
     }
@@ -276,6 +285,7 @@ export const THEME_VISUALS: Record<ThemeKey, ThemeVisual> = {
       kicker: "The old world stirs",
       join: "A survivor crests the ridge",
       reconnect: "A survivor limps back to the fire",
+      depart: "A survivor's trail goes cold",
       gathering: "Ash settles over the meeting ground…",
       joinGathering: "Another silhouette against the dust…"
     }

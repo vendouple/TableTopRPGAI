@@ -23,16 +23,24 @@ export async function register() {
   // Next.js 14 dev prints request lines like:
   //   "GET /api/campaigns/abc 200 in 15ms"
   //   "POST /api/join 200 in 120ms"
-  // but colorizes them with ANSI escape codes, so strip those before testing.
+  // and, the FIRST few times each route is hit, per-route compile chatter:
+  //   "○ Compiling /api/party ..."
+  //   "✓ Compiled /api/party in 512ms (243 modules)"
+  // Both are noise from the TV/controller polling loop. Lines are colorized
+  // with ANSI escape codes, so strip those before testing.
   const ANSI = /\x1b\[[0-9;]*m/g;
-  const requestLine = /^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/\S+\s+\d{3}\s+in\s+\d+ms\s*$/;
+  const requestLine = /^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/\S+\s+\d{3}\s+in\s+\d+m?s\s*$/;
+  const apiCompileLine = /^\s*[○✓⚠]?\s*Compil(?:ing|ed)\s+\/api\/\S*(\s|$)/;
 
-  const isRequestLine = (s: string) => requestLine.test(s.replace(ANSI, ""));
+  const isNoiseLine = (s: string) => {
+    const plain = s.replace(ANSI, "").trimEnd();
+    return requestLine.test(plain) || apiCompileLine.test(plain);
+  };
 
   // Patch console.log (Next.js's primary request logger).
   const originalLog = console.log;
   console.log = (...args: unknown[]) => {
-    if (args.length === 1 && typeof args[0] === "string" && isRequestLine(args[0])) {
+    if (args.length === 1 && typeof args[0] === "string" && isNoiseLine(args[0])) {
       return; // drop the noisy polling line
     }
     originalLog.apply(console, args as unknown as [unknown, ...unknown[]]);
@@ -43,7 +51,7 @@ export async function register() {
   const stdout = process.stdout;
   const originalWrite = stdout.write.bind(stdout);
   stdout.write = ((chunk: any, ...rest: unknown[]) => {
-    if (typeof chunk === "string" && isRequestLine(chunk)) {
+    if (typeof chunk === "string" && isNoiseLine(chunk)) {
       return true; // pretend we wrote it
     }
     return originalWrite(chunk, ...(rest as any));

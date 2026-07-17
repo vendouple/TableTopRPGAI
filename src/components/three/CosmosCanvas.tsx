@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
+import { createThemeProp } from "@/components/three/themeProps";
 
 /** Soft radial glow used for nebulae, bokeh, suns, and shooting-star heads. */
 function makeGlowTexture(inner: string, outer: string) {
@@ -561,6 +562,13 @@ export default function CosmosCanvas({
       });
     }
 
+    // -- signature prop -----------------------------------------------------
+    // The theme's hero landmark beside the dice — an enchanted blade, an
+    // orbital station, a candelabra, a streetlamp, a drone, a tumbleweed,
+    // a snapped beacon mast. Nothing for the neutral Astral Table.
+    const themeProp = createThemeProp(scene, visual, "cosmos");
+    if (themeProp) frameHooks.push((dt, t, drive) => themeProp.update(t, dt, drive));
+
     // -- pointer parallax --------------------------------------------------
     const pointer = { x: 0, y: 0 };
     const onPointerMove = (event: PointerEvent) => {
@@ -662,6 +670,7 @@ export default function CosmosCanvas({
           if (child instanceof THREE.LineSegments) child.geometry.dispose();
         });
       }
+      themeProp?.dispose();
       for (const item of disposables) item.dispose();
       if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
     };

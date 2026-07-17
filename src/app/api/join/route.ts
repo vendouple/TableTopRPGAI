@@ -66,6 +66,10 @@ export async function POST(request: Request) {
       if (characterName) player.characterName = characterName;
       if (background) player.background = background;
       if (personality) player.personality = personality;
+      // An explicit rejoin ends the absence: the rejoin turn below weaves them
+      // back in, so the presence sweep must not re-run a return weave later.
+      player.away = false;
+      player.wovenOut = false;
     }
 
     if (!campaign.partyLeaderId) campaign.partyLeaderId = player.id;
@@ -91,7 +95,10 @@ export async function POST(request: Request) {
             const currentCampaign = await getCampaign(campaign.id);
             const p = currentCampaign.players.find(item => item.id === player!.id);
             if (p) {
-              p.status = "Generating profile...";
+              // Don't stomp a good profile back to "Generating profile..." on a
+              // retry: if a prior attempt already produced a portrait, the sheet
+              // is effectively complete and runProfileGeneration will finalize it.
+              if (!p.portraitUrl) p.status = "Generating profile...";
               currentCampaign.dmStatus = `Forging character sheet... (Attempt ${attempt}/${maxTries})`;
               currentCampaign.dmPhase = "sheet";
               await saveCampaign(currentCampaign);

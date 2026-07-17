@@ -1,0 +1,17 @@
+
+> local-ai-dnd@0.1.0 dev
+> next dev
+
+  [1m[38;2;173;127;168m▲ Next.js 14.2.35[39m[22m
+  - Local:        http://localhost:3000
+  - Environments: .env
+  - Experiments (use with caution):
+    · instrumentationHook
+
+ [32m[1m✓[22m[39m Starting...
+ [32m[1m✓[22m[39m Compiled /instrumentation in 460ms (20 modules)
+ [32m[1m✓[22m[39m Ready in 2.7s
+ [37m[1m○[22m[39m Compiling / ...
+ [32m[1m✓[22m[39m Compiled / in 2.7s (554 modules)
+ GET / [32m200[39m in 28ms
+[?25h

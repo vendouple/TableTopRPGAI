@@ -14,14 +14,14 @@ import type {
   StoryCharacter
 } from "@/lib/campaign/types";
 import { api, accentColor } from "@/lib/client/api";
-import { bgmDuck, bgmIsMuted, subscribeBgm } from "@/lib/client/audio";
+import { bgmDuck, bgmIsMuted, bgmSetContext, bgmSetTheme, subscribeBgm, type BgmContext } from "@/lib/client/audio";
 import { playSfx, type SfxName } from "@/lib/client/sfx";
 import { parseInline, plainText, renderInline, renderTokens } from "@/lib/client/markup";
 import { ACCENT_THEMES, applyAccent, currentAccent, initAccent } from "@/lib/client/theme";
 import StageAtmosphere, { AtmosphereHandle } from "@/components/three/StageAtmosphere";
 import DiceTheater, { DiceRollData } from "@/components/three/DiceTheater";
 import CosmosCanvas from "@/components/three/CosmosCanvas";
-import WeavingLoom from "@/components/three/WeavingLoom";
+import WorldForge from "@/components/three/WorldForge";
 import OutroTheater from "@/components/three/OutroTheater";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
@@ -40,7 +40,17 @@ const MOOD_GRADES: Record<string, string> = {
 };
 
 const DEBUG_THEMES: ThemeKey[] = ["none", "fantasy", "scifi", "horror", "noir", "modern", "western", "postapoc"];
-const DEBUG_MOODS: AmbienceMood[] = ["calm", "tense", "adrenaline", "battle", "boss", "mystery", "dread", "triumph", "wonder", "somber", "outro"];
+/**
+ * Mood tabs in the debug gallery: the live ambience moods plus every
+ * per-ending outro score (BGM/outro-<kind>/<genre>/). Outro tabs share the
+ * base "outro" visual grade; combined with the theme tabs they let every
+ * shelf × genre pairing be auditioned straight from the gallery.
+ */
+type DebugMoodKey = AmbienceMood | `outro-${EndingKind}`;
+const DEBUG_MOODS: DebugMoodKey[] = [
+  "calm", "tense", "adrenaline", "battle", "boss", "mystery", "dread", "triumph", "wonder", "somber",
+  "outro", "outro-victory", "outro-defeat", "outro-bittersweet", "outro-escape", "outro-draw", "outro-cliffhanger"
+];
 const DEBUG_EFFECTS: StageEffectKind[] = ["shake", "flash", "embers", "fog", "rain", "snow", "darkness", "heartbeat"];
 const DEBUG_OUTCOMES: DiceOutcome[] = [
   "critical-success",
@@ -54,7 +64,7 @@ const DEBUG_OUTCOMES: DiceOutcome[] = [
 const DEBUG_ENDINGS: EndingKind[] = ["victory", "defeat", "bittersweet", "escape", "draw", "cliffhanger"];
 const DEBUG_SFX: SfxName[] = ["tap", "confirm", "send", "join", "beat", "flash", "rumble", "darkness", "heartbeat"];
 const DEBUG_BEATS = ["narration", "dialogue", "playerAction", "system"] as const;
-type DebugScene = "cosmos" | "loom";
+type DebugScene = "cosmos" | "loom" | "forge-lobby";
 
 /** Sample endings so every finale can be inspected without playing a saga to its close. */
 const DEBUG_ENDING_SAMPLES: Record<EndingKind, Pick<CampaignEnding, "title" | "summary" | "highlights" | "stats">> = {
@@ -231,7 +241,7 @@ export default function HostStage({
 }) {
   const [debugOpen, setDebugOpen] = useState(debugMode);
   const [debugTheme, setDebugTheme] = useState<ThemeKey | null>(null);
-  const [debugMood, setDebugMood] = useState<AmbienceMood | null>(null);
+  const [debugMood, setDebugMood] = useState<DebugMoodKey | null>(null);
   const [debugOutro, setDebugOutro] = useState<EndingKind | null>(null);
   const [debugScene, setDebugScene] = useState<DebugScene | null>(null);
   const [debugSigil, setDebugSigil] = useState(false);
@@ -502,7 +512,10 @@ export default function HostStage({
     return () => clearInterval(timer);
   }, [darkUntil, pulseUntil, now]);
 
-  const mood = debugMood || campaign.ambience?.mood || "calm";
+  // The selected tab may be a per-ending outro score; those share the base
+  // "outro" grade/atmosphere on screen while the music plays their own shelf.
+  const moodKey: DebugMoodKey = debugMood || campaign.ambience?.mood || "calm";
+  const mood: AmbienceMood = (moodKey.startsWith("outro-") ? "outro" : moodKey) as AmbienceMood;
   const intensity = campaign.ambience?.intensity ?? 0.5;
 
   /* ------------------------------------------------------------------ */
@@ -518,6 +531,20 @@ export default function HostStage({
   useEffect(() => {
     bgmDuck(!!activeDice);
   }, [activeDice]);
+
+  // Debug gallery doubles as a live music preview: theme tabs flip the score's
+  // genre, mood/outro tabs play their shelf, and a selected outro finale plays
+  // its per-ending score — so every BGM/<shelf>/<genre>/ combination can be
+  // auditioned from the tabs. Live games never enter here (debugMode only);
+  // HostExperience remains the single bard driver on a real stage.
+  useEffect(() => {
+    if (!debugMode) return;
+    bgmSetTheme(visual.key === "none" ? null : visual.key);
+  }, [debugMode, visual.key]);
+  useEffect(() => {
+    if (!debugMode) return;
+    bgmSetContext(debugOutro ? `outro-${debugOutro}` : (moodKey as BgmContext));
+  }, [debugMode, debugOutro, moodKey]);
 
   /* ------------------------------------------------------------------ */
   /* Director drawer                                                     */
@@ -841,6 +868,10 @@ export default function HostStage({
           </span>
         ) : null}
         {campaign.ambience?.note ? <span className="stage-ambience-note">{campaign.ambience.note}</span> : null}
+        {/* Standing summons: late heroes can join mid-tale from this code. */}
+        <span className="stage-join-chip" title="New heroes can join any time — the Weaver will stitch them in">
+          ⟡ Join · <strong>{campaign.joinCode}</strong>
+        </span>
       </header>
 
       {/* Hero rail (players, left) — only those in the focused location */}
@@ -991,11 +1022,13 @@ export default function HostStage({
         <div className="debug-scene-overlay" onClick={(event) => event.stopPropagation()}>
           {debugScene === "cosmos" ? (
             <CosmosCanvas accent={visual.accent} drama={0.85} theme={visual.key} />
+          ) : debugScene === "forge-lobby" ? (
+            <WorldForge mode="lobby" drama={0.75} accent={visual.accent} theme={visual.key} />
           ) : (
-            <WeavingLoom progress={loomProgress} accent={visual.accent} theme={visual.key} />
+            <WorldForge mode="weaving" progress={loomProgress} accent={visual.accent} theme={visual.key} />
           )}
           <button className="ghost-button debug-scene-close" onClick={() => setDebugScene(null)}>
-            ✕ Close {debugScene === "cosmos" ? "cosmos" : `loom (${Math.round(loomProgress * 100)}%)`}
+            ✕ Close {debugScene === "cosmos" ? "cosmos" : debugScene === "forge-lobby" ? "forge (lobby)" : `forge (${Math.round(loomProgress * 100)}%)`}
           </button>
         </div>
       ) : null}
@@ -1020,7 +1053,8 @@ export default function HostStage({
           <label className="director-label">Three.js scenes</label>
           <div className="debug-grid menus">
             <button className={`chip-toggle tiny ${debugScene === "cosmos" ? "selected" : ""}`} onClick={() => setDebugScene((scene) => (scene === "cosmos" ? null : "cosmos"))}>Cosmos</button>
-            <button className={`chip-toggle tiny ${debugScene === "loom" ? "selected" : ""}`} onClick={() => setDebugScene((scene) => (scene === "loom" ? null : "loom"))}>Weaving Loom</button>
+            <button className={`chip-toggle tiny ${debugScene === "loom" ? "selected" : ""}`} onClick={() => setDebugScene((scene) => (scene === "loom" ? null : "loom"))}>Worldforge</button>
+            <button className={`chip-toggle tiny ${debugScene === "forge-lobby" ? "selected" : ""}`} onClick={() => setDebugScene((scene) => (scene === "forge-lobby" ? null : "forge-lobby"))}>Forge lobby</button>
             <button className="chip-toggle tiny" onClick={() => previewDice("success")}>Dice Theater</button>
           </div>
 
@@ -1053,11 +1087,20 @@ export default function HostStage({
             ))}
           </div>
 
-          <label className="director-label">Atmosphere moods</label>
+          <label className="director-label">Atmosphere moods & scores (per genre)</label>
           <div className="debug-grid">
-            {DEBUG_MOODS.map((moodKey) => (
-              <button key={moodKey} className={`chip-toggle tiny ${mood === moodKey ? "selected" : ""}`} onClick={() => setDebugMood(moodKey)}>
-                {moodKey}
+            {DEBUG_MOODS.map((moodOption) => (
+              <button
+                key={moodOption}
+                className={`chip-toggle tiny ${!debugOutro && moodKey === moodOption ? "selected" : ""}`}
+                onClick={() => {
+                  // A mood/score tab takes over the bard — drop any finale
+                  // overlay so what you hear is what you clicked.
+                  setDebugOutro(null);
+                  setDebugMood(moodOption);
+                }}
+              >
+                {moodOption}
               </button>
             ))}
           </div>

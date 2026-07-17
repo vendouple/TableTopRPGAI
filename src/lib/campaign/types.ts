@@ -73,6 +73,12 @@ export type Player = {
   lastSeenAt?: number;
   /** True once the player explicitly left (or timed out and was woven out). */
   away?: boolean;
+  /**
+   * True once a departure DM turn has written this hero out of the scene
+   * (disconnect timeout). Cleared when they rejoin, so the return weave runs
+   * exactly once per absence — never twice for the same disconnect.
+   */
+  wovenOut?: boolean;
   /** Which Location this player is currently in (party can split). */
   locationId?: string;
   /** Narrative zone within the current location. */
@@ -371,6 +377,25 @@ export type EndingStat = {
   value: string;
 };
 
+/**
+ * One hero's credit line on the outro reel. The DM fills these so the credits
+ * read like a film's cast crawl — each player gets an epithet, a fate/what they
+ * did, and optional personal tallies. Matched back to a live Player by id or
+ * name so the outro can also show their real final HP/portrait.
+ */
+export type EndingCastMember = {
+  /** Player id (preferred) to match a live Player. */
+  playerId?: string;
+  /** Character or player name — a fallback match when no id is given. */
+  name?: string;
+  /** Epithet / title earned, e.g. "The Salt-Blind Prophet". */
+  title?: string;
+  /** 1-2 sentence fate: what they did across the saga and how they ended. */
+  fate?: string;
+  /** Optional personal tallies for their credit card (deeds, kills, lies). */
+  stats?: EndingStat[];
+};
+
 /** Snapshot shown on the TV outro cinematic after the campaign ends. */
 export type CampaignEnding = {
   kind: EndingKind;
@@ -384,6 +409,8 @@ export type CampaignEnding = {
   highlights?: string[];
   /** Optional campaign statistics for the outro's stats board. */
   stats?: EndingStat[];
+  /** Optional per-player credit lines for the outro's cast reel. */
+  cast?: EndingCastMember[];
 };
 
 export type Campaign = {

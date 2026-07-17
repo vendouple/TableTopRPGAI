@@ -1925,8 +1925,11 @@ button:disabled { cursor: default; opacity: 0.45; }
   color: var(--faint);
 }
 .outro-cast {
-  width: min(26rem, 90vw);
+  width: min(34rem, 92vw);
   margin: 0 0 1.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
 }
 .outro-cast h3 {
   font-family: var(--font-ui), system-ui, sans-serif;
@@ -1934,23 +1937,101 @@ button:disabled { cursor: default; opacity: 0.45; }
   letter-spacing: 0.26em;
   text-transform: uppercase;
   color: var(--faint);
-  margin: 0 0 0.6rem;
+  margin: 0 0 0.2rem;
+  text-align: center;
 }
-.outro-cast-line {
+/* One hero per credit card: portrait, name + player, epithet, fate, stat row. */
+.outro-cast-card {
   display: flex;
-  justify-content: space-between;
+  gap: 0.85rem;
+  align-items: flex-start;
+  text-align: left;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(232, 220, 192, 0.16);
+  border-radius: 14px;
+  background: rgba(6, 8, 14, 0.62);
+  backdrop-filter: blur(5px);
+}
+.outro-cast-face {
+  flex: 0 0 auto;
+  width: 3.1rem;
+  height: 3.1rem;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(232, 220, 192, 0.4);
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+.outro-cast-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.outro-cast-glyph {
+  color: var(--gold);
+  opacity: 0.6;
+  font-size: 1.1rem;
+}
+.outro-cast-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+.outro-cast-heading {
+  display: flex;
   align-items: baseline;
-  gap: 1rem;
-  padding: 0.32rem 0;
-  border-bottom: 1px solid rgba(232, 220, 192, 0.09);
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 .outro-cast-character {
   font-family: var(--font-serif), serif;
-  font-size: 1.05rem;
+  font-size: 1.08rem;
 }
 .outro-cast-player {
   color: var(--faint);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
+}
+.outro-cast-epithet {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+  opacity: 0.9;
+}
+.outro-cast-fate {
+  margin: 0.1rem 0 0;
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #d9d2c0;
+}
+.outro-cast-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin-top: 0.35rem;
+}
+.outro-cast-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.outro-cast-stat-value {
+  font-family: var(--font-display), serif;
+  font-size: 0.95rem;
+  color: var(--gold-bright);
+}
+.outro-cast-stat-label {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 .outro-fin {
   font-family: var(--font-display), serif;
@@ -2194,6 +2275,41 @@ button:disabled { cursor: default; opacity: 0.45; }
   background: rgba(80, 200, 120, 0.06);
 }
 .turn-round { opacity: 0.6; }
+/* Turn/round timeout — a depleting bar so the auto-resolve is never a surprise. */
+.timeout-bar {
+  position: relative;
+  height: 1.55rem;
+  margin-bottom: 0.6rem;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.05);
+}
+.timeout-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(201, 163, 92, 0.55), rgba(201, 163, 92, 0.28));
+  /* width is set inline and steps every ~0.5s; ease the shrink between ticks. */
+  transition: width 0.5s linear, background 0.4s ease;
+}
+.timeout-bar.urgent .timeout-bar-fill {
+  background: linear-gradient(90deg, rgba(224, 84, 64, 0.7), rgba(224, 84, 64, 0.35));
+}
+.timeout-bar-label {
+  position: relative;
+  z-index: 1;
+  display: block;
+  text-align: center;
+  line-height: 1.55rem;
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--parchment);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.timeout-bar.urgent .timeout-bar-label { color: #ffd9d2; }
 .net-banner {
   text-align: center;
   padding: 0.4rem 0.8rem;
@@ -2450,7 +2566,209 @@ button:disabled { cursor: default; opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    /* Delays must die with durations: a `both`-fill entrance animation held in
+       its from-frame (opacity 0) by an un-zeroed delay reads as missing UI. */
+    animation-delay: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ==========================================================================
+   The Worldforge — weaving HUD, standing summons, and story intermissions
+   ========================================================================== */
+
+/* Faint construction scanlines over the forge — hologram, not CRT kitsch. */
+.weaving-scan {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 4px);
+  mix-blend-mode: screen;
+}
+
+/* Corner HUD: tracked-out micro labels, like instrument readouts. */
+.weaving-hud {
+  position: absolute;
+  top: 1.4rem;
+  left: 1.6rem;
+  right: 1.6rem;
+  z-index: 3;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  animation: fade-in 1.2s ease both;
+}
+.weaving-hud-label,
+.weaving-hud-stage {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.42em;
+  color: var(--faint);
+}
+.weaving-hud-stage {
+  color: var(--gold);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--gold-bright) 45%, transparent);
+}
+
+/* Monotonic forge meter — thin bar, gradient fill, tabular count. */
+.weaving-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: 0 auto 1.1rem;
+  max-width: 30rem;
+}
+.weaving-progress-track {
+  flex: 1;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(232, 220, 192, 0.12);
+  overflow: hidden;
+}
+.weaving-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--arcane), var(--gold-bright));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--gold-bright) 70%, transparent);
+  transition: width 0.25s linear;
+}
+.weaving-percent {
+  font-family: var(--font-display), serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 1rem;
+  min-width: 3ch;
+  text-align: right;
+  color: var(--gold-bright);
+  text-shadow: 0 0 16px color-mix(in srgb, var(--gold-bright) 55%, transparent);
+}
+
+/* The moment the world holds: the title flares and settles its tracking. */
+.weaving-title.forged {
+  animation: title-forged 1.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes title-forged {
+  0% { letter-spacing: 0.4em; opacity: 0.6; text-shadow: 0 0 60px color-mix(in srgb, var(--gold-bright) 90%, transparent); }
+  100% { letter-spacing: 0.08em; opacity: 1; text-shadow: 0 4px 30px rgba(0, 0, 0, 0.85), 0 0 34px color-mix(in srgb, var(--gold-bright) 40%, transparent); }
+}
+
+/* Standing summons: late heroes can scan in while the world is woven. */
+.weaving-summons {
+  position: absolute;
+  right: 1.4rem;
+  bottom: 1.4rem;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 1.1rem;
+  max-width: 21rem;
+  animation: rise-in 1.2s ease 0.6s both;
+}
+.weaving-summons-row {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+.weaving-summons-code {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.join-qr.small { padding: 0.5rem; border-radius: 10px; }
+.join-code.compact { gap: 0.3rem; }
+.join-code-glyph.small {
+  font-size: 1.5rem;
+  text-shadow: 0 0 16px rgba(230, 195, 120, 0.55);
+}
+
+/* The intermission: a plain, honest spinner while the timeline is respliced. */
+.story-pause {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(5, 7, 13, 0.55) 0%, rgba(5, 7, 13, 0.88) 100%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fade-in 0.45s ease both;
+}
+.story-pause-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  text-align: center;
+  padding: 2rem;
+  max-width: 34rem;
+}
+.story-pause-kicker {
+  font-family: var(--font-display), serif;
+  font-size: 1.35rem;
+  letter-spacing: 0.1em;
+  color: var(--parchment);
+  text-shadow: 0 0 30px color-mix(in srgb, var(--gold-bright) 35%, transparent);
+}
+.story-pause-name {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  color: var(--gold);
+}
+.story-pause-detail {
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  font-size: 1.05rem;
+  color: var(--mist);
+  min-height: 1.5em;
+  margin: 0;
+}
+.story-pause-hint {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--faint);
+}
+
+/* Standing join chip in the stage mast. */
+.stage-join-chip {
+  align-self: center;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--mist);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  background: rgba(201, 163, 92, 0.07);
+}
+.stage-join-chip strong {
+  font-family: var(--font-display), serif;
+  color: var(--gold-bright);
+  letter-spacing: 0.14em;
+}
+
+/* Phone-side queued join: seat saved, world still weaving. */
+.join-queued {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 1.2rem;
+  padding: 1.2rem 1rem;
+  border: 1px dashed var(--hairline);
+  border-radius: 12px;
+  text-align: center;
+  animation: fade-in 0.5s ease both;
+}
+.join-queued p {
+  margin: 0;
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  color: var(--mist);
+  font-size: 0.98rem;
+  line-height: 1.5;
 }

@@ -19,9 +19,13 @@ async function listAudioFiles(dirPath: string): Promise<string[]> {
  *
  * BGM lives in public/music/BGM/<context>/*.mp3 where <context> is a shelf
  * the client asks for: lobby, weaving, main, calm, tense, adrenaline, battle,
- * boss, mystery, dread, triumph, wonder, somber. Loose files directly in BGM/ are exposed
- * under the "any" shelf (a general-purpose pool). SFX overrides live in
- * public/music/SFX/<cue>.mp3 (see src/lib/client/sfx.ts for cue names).
+ * boss, mystery, dread, triumph, wonder, somber, plus the end-credit shelves
+ * outro and outro-<kind> (victory/defeat/bittersweet/escape/draw/cliffhanger).
+ * Each shelf may hold per-genre subfolders (BGM/<context>/<theme>/ → the
+ * "<context>-<theme>" shelf, preferred when the campaign's theme matches).
+ * Loose files directly in BGM/ are exposed under the "any" shelf (a
+ * general-purpose pool). SFX overrides live in public/music/SFX/<cue>.mp3
+ * (see src/lib/client/sfx.ts for cue names).
  */
 export async function GET() {
   try {

@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import type { CampaignEnding, EndingKind, EndingStat, Player } from "@/lib/campaign/types";
+import type { CampaignEnding, EndingCastMember, EndingKind, EndingStat, Player } from "@/lib/campaign/types";
 import { accentColor } from "@/lib/client/api";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
+import { createThemeLayer, themeGutter } from "@/components/three/themeLayers";
 
 /**
  * Every ending kind gets its own finale choreography — the same instruments
@@ -550,6 +551,12 @@ export default function OutroTheater({
       core.scale.set(recipe.core[0] * 3, recipe.core[0] * 0.55, 1);
     }
 
+    /* ---------------- Theme garnish (one per campaign genre) ---------------- */
+    // The genre's signature weather plays through the finale too — noir rain
+    // keeps falling on the credits, fantasy auroras crown the victory, ash
+    // sifts across a wasteland defeat. Same layers as the live stage.
+    const themeLayer = createThemeLayer(scene, visual, { width: 38, height: 24, z: -9 });
+
     const resize = () => {
       renderer.setSize(mount.clientWidth, mount.clientHeight, false);
       camera.aspect = mount.clientWidth / Math.max(mount.clientHeight, 1);
@@ -579,7 +586,10 @@ export default function OutroTheater({
       // heartbeat — motion freezes, the light gutters — then lurches onward,
       // and each stall leaves the sky wrenched slightly out of true.
       let speedMul = 1;
-      let lightMul = 1;
+      // The genre's own light personality plays under the finale: a horror
+      // ending gutters like dying candles, a wasteland one stutters, a fantasy
+      // one holds steady gold.
+      let lightMul = themeGutter(visual, t);
       if (recipe.flicker > 0) {
         const cycle = Math.floor(t / 5);
         const phase = t % 5;
@@ -752,6 +762,8 @@ export default function OutroTheater({
 
       stars.rotation.z += dt * 0.004;
 
+      themeLayer?.update(t, dt, fadeIn * Math.min(1, lightMul) * 0.85);
+
       renderer.render(scene, camera);
     };
     frame = requestAnimationFrame(loop);
@@ -787,6 +799,7 @@ export default function OutroTheater({
       coreTexture.dispose();
       coreMaterial.dispose();
       for (const item of extraDisposables) item.dispose();
+      themeLayer?.dispose();
       if (renderer.domElement.parentElement === mount) mount.removeChild(renderer.domElement);
     };
     // Rebuild the whole finale when the ending kind or theme changes (debug gallery).
@@ -796,6 +809,21 @@ export default function OutroTheater({
   /* ---------------- Staged credits sequence ---------------- */
   const highlights = ending.highlights || [];
   const stats: EndingStat[] = ending.stats || [];
+  // Match each AI-authored cast line back to a live player (by id, else name)
+  // so a card can pair the credit line with the character's real portrait/HP.
+  const castByPlayer = useMemo(() => {
+    const map = new Map<string, EndingCastMember>();
+    for (const member of ending.cast || []) {
+      const match = players.find(
+        (p) =>
+          (member.playerId && p.id === member.playerId) ||
+          (member.name &&
+            [p.characterName || "", p.name].some((n) => n && n.toLowerCase() === member.name!.toLowerCase()))
+      );
+      if (match && !map.has(match.id)) map.set(match.id, member);
+    }
+    return map;
+  }, [ending.cast, players]);
   // Each block fades in after the previous one; delays accumulate down the reel.
   const delays = useMemo(() => {
     let at = 0.5;
@@ -811,7 +839,7 @@ export default function OutroTheater({
       summary: next(1.1),
       highlights: next(highlights.length * 0.4 + (highlights.length ? 0.5 : 0)),
       stats: next(stats.length ? 1.1 : 0),
-      cast: next(players.length ? 1 : 0),
+      cast: next(players.length ? players.length * 0.25 + 0.9 : 0),
       fin: next(0.8),
       leave: at
     };
@@ -850,16 +878,56 @@ export default function OutroTheater({
             </div>
           ) : null}
           {players.length ? (
-            <div className="outro-cast outro-rise" style={rise(delays.cast)}>
-              <h3>The Party</h3>
-              {players.map((player) => (
-                <div key={player.id} className="outro-cast-line">
-                  <span className="outro-cast-character" style={{ color: accentColor(player.color) }}>
-                    {player.characterName || player.name}
-                  </span>
-                  {player.characterName ? <span className="outro-cast-player">{player.name}</span> : null}
-                </div>
-              ))}
+            <div className="outro-cast">
+              <h3 className="outro-rise" style={rise(delays.cast)}>The Party</h3>
+              {players.map((player, index) => {
+                const member = castByPlayer.get(player.id);
+                const pColor = accentColor(player.color);
+                const hp = player.stats.find((stat) => stat.name.toUpperCase() === "HP");
+                const personalStats = member?.stats || [];
+                return (
+                  <div
+                    key={player.id}
+                    className="outro-cast-card outro-rise"
+                    style={{ ...rise(delays.cast + 0.35 + index * 0.25), borderColor: `${pColor}44` }}
+                  >
+                    <div className="outro-cast-face" style={{ borderColor: pColor }}>
+                      {player.portraitUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={player.portraitUrl} alt={player.characterName || player.name} />
+                      ) : (
+                        <span className="outro-cast-glyph" aria-hidden>✦</span>
+                      )}
+                    </div>
+                    <div className="outro-cast-body">
+                      <div className="outro-cast-heading">
+                        <span className="outro-cast-character" style={{ color: pColor }}>
+                          {player.characterName || player.name}
+                        </span>
+                        {player.characterName ? <span className="outro-cast-player">{player.name}</span> : null}
+                      </div>
+                      {member?.title ? <span className="outro-cast-epithet">{member.title}</span> : null}
+                      {member?.fate ? <p className="outro-cast-fate">{member.fate}</p> : null}
+                      {personalStats.length || hp ? (
+                        <div className="outro-cast-stats">
+                          {hp ? (
+                            <span className="outro-cast-stat">
+                              <span className="outro-cast-stat-value">{hp.value}/{hp.maxValue}</span>
+                              <span className="outro-cast-stat-label">HP</span>
+                            </span>
+                          ) : null}
+                          {personalStats.map((stat, statIndex) => (
+                            <span key={statIndex} className="outro-cast-stat">
+                              <span className="outro-cast-stat-value">{stat.value}</span>
+                              <span className="outro-cast-stat-label">{stat.label}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : null}
           <div className="outro-fin outro-rise" style={rise(delays.fin)}>{recipe.fin}</div>
