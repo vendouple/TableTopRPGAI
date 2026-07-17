@@ -21,6 +21,18 @@ import type { DmPhase } from "@/lib/campaign/types";
  *    above the floor, so it visibly breathes but never stalls flat or lies
  *    its way to 100%,
  *  - it never passes 95.5% until `complete`, then glides to 100%.
+ *
+ * The floor itself is a bad animation target on its own: the opening turn's
+ * very FIRST tool call is usually `generate_image` for the establishing shot,
+ * which sets the floor to the "image" milestone (68%) before the image has
+ * even started rendering — and a player sheet write soon after pushes it to
+ * "sheet" (82%), often within the first real seconds. If the shown value
+ * chased that floor quickly, the bar would already read ~80% by the time
+ * anyone looks at the screen, with the true heavy lifting (portraits, prose)
+ * still ahead of it. So CLIMB_RATE caps the shown value's ascent in absolute
+ * fraction/second regardless of how big the gap to the floor is — the climb
+ * to "sheet" takes on the order of a minute of real, watchable counting up
+ * from 0, matching how long that stretch actually runs in practice.
  */
 
 const MILESTONES: Record<DmPhase, number> = {
@@ -39,6 +51,12 @@ const PHASE_ORDER: DmPhase[] = ["signal", "world", "scene", "image", "sheet", "l
 const CEILING = 0.955;
 const HEADROOM = 0.09;
 const STATUS_NUDGE = 0.012;
+// Hard speed limits (fraction/second). Even when the floor leaps — loading the
+// page mid-generation lands straight on `sheet` (0.82) — the bar BUILDS toward
+// it instead of snapping there. The wait at ~80% is long anyway; spend it
+// climbing so the forge reads as continuously working.
+const CLIMB_RATE = 0.045;
+const FINISH_RATE = 0.12;
 
 export function useWeaveProgress(phase: DmPhase | undefined, status: string | undefined, complete: boolean) {
   const [progress, setProgress] = useState(0.02);
@@ -73,12 +91,15 @@ export function useWeaveProgress(phase: DmPhase | undefined, status: string | un
       last = now;
       let shown = shownRef.current;
       if (complete) {
-        shown = Math.min(1, shown + (1.002 - shown) * Math.min(1, dt * 2.4));
+        const step = (1.002 - shown) * Math.min(1, dt * 2.4);
+        shown = Math.min(1, shown + Math.min(step, FINISH_RATE * dt));
       } else {
         const ceiling = Math.min(CEILING, floorRef.current + HEADROOM);
-        // Fast catch-up while below the floor, slow creep above it.
+        // Fast catch-up while below the floor, slow creep above it — but the
+        // catch-up is rate-capped, so it ramps rather than leaps.
         const rate = shown < floorRef.current ? 1.5 : 0.14;
-        shown += Math.max(0, ceiling - shown) * Math.min(1, dt * rate);
+        const step = Math.max(0, ceiling - shown) * Math.min(1, dt * rate);
+        shown += Math.min(step, CLIMB_RATE * dt);
       }
       if (shown - shownRef.current > 0.0004 || (complete && shown !== shownRef.current)) {
         shownRef.current = shown;

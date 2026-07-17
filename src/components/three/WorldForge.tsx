@@ -20,7 +20,8 @@ import { themeVisual, ThemeKey, ThemeVisual } from "@/components/three/themeVisu
    matter fills in behind an emissive scan line. A stardust vortex contracts
    into the worldheart, a builder-stream of motes feeds whichever landmark is
    currently forming, and at 100% a ground shockwave and flash mark the moment
-   the world holds. The campaign theme recolors the palette, re-letters the
+   the world holds. An energy draw spirals motes in from the void to feed the
+   worldheart for the whole weave. The campaign theme recolors the palette, re-letters the
    ground inscription, swaps the landmark kit, and sets the motion personality
    (rising fantasy embers, noir rain, machine-steady scifi rings…).
    ═══════════════════════════════════════════════════════════════════════ */
@@ -560,7 +561,16 @@ export default function WorldForge({
     disposables.push(glyphTexture, glyphGeometry, glyphMaterial);
 
     /* -- the worldheart + light column -------------------------------------- */
-    const HEART_Y = 4.9;
+    // The heart must hover clear of the tallest landmark — kits differ (the
+    // noir tower reaches far past the fantasy spire), and no building may
+    // pierce the orb. 1.7 ≈ outer wire radius × max heart scale.
+    const worldTop = landmarks.reduce(
+      (top, lm) => Math.max(top, new THREE.Box3().setFromObject(lm.group).max.y),
+      0
+    );
+    const HEART_Y = Math.max(4.9, worldTop + 1.7 + 0.45);
+    const heartLift = HEART_Y - 4.9;
+    heartLight.position.y = HEART_Y;
     const heart = new THREE.Group();
     heart.position.set(0, HEART_Y, 0);
     scene.add(heart);
@@ -583,7 +593,9 @@ export default function WorldForge({
       heartCore.geometry, heartCore.material as THREE.Material
     );
     const heartGlowTexture = makeGlowTexture(`rgba(${visual.loom.heart},0.85)`, `rgba(${visual.loom.heart},0)`);
-    const heartGlowMaterial = new THREE.SpriteMaterial({ map: heartGlowTexture, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
+    // depthTest off: the glow is light, not matter — geometry crossing its
+    // billboard plane must never carve a hard silhouette out of it.
+    const heartGlowMaterial = new THREE.SpriteMaterial({ map: heartGlowTexture, transparent: true, opacity: 0.5, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
     const heartGlow = new THREE.Sprite(heartGlowMaterial);
     heartGlow.scale.setScalar(6);
     heart.add(heartGlow);
@@ -664,6 +676,33 @@ export default function WorldForge({
     scene.add(stream);
     disposables.push(streamGeometry, streamMaterial);
     const streamTarget = new THREE.Vector3(0, HEART_Y, 0);
+
+    /* -- energy draw: motes spiral in from the void to feed the worldheart --
+       The heart visibly PULLS — particles are born far out in the dark and
+       accelerate along a tightening spiral into it for the whole weave. */
+    const DRAW = 320;
+    const dSeeds = new Float32Array(DRAW * 4); // phase, speed, angle0, yScatter
+    for (let i = 0; i < DRAW; i += 1) {
+      dSeeds[i * 4] = rand();
+      dSeeds[i * 4 + 1] = 0.14 + rand() * 0.2;
+      dSeeds[i * 4 + 2] = rand() * Math.PI * 2;
+      dSeeds[i * 4 + 3] = (rand() - 0.5) * 7;
+    }
+    const drawGeometry = new THREE.BufferGeometry();
+    drawGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(DRAW * 3), 3));
+    const drawMaterial = new THREE.PointsMaterial({
+      map: sparkTexture,
+      color: brightColor,
+      size: 0.07,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+    const draw = new THREE.Points(drawGeometry, drawMaterial);
+    scene.add(draw);
+    disposables.push(drawGeometry, drawMaterial);
 
     /* -- lock-in spark bursts (pooled) -------------------------------------- */
     const BURSTS = 8;
@@ -771,7 +810,7 @@ export default function WorldForge({
     shock.visible = false;
     scene.add(shock);
     disposables.push(shock.geometry, shockMaterial);
-    const flashMaterial = new THREE.SpriteMaterial({ map: heartGlowTexture, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    const flashMaterial = new THREE.SpriteMaterial({ map: heartGlowTexture, transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
     const flash = new THREE.Sprite(flashMaterial);
     flash.position.set(0, 3, 0);
     flash.scale.setScalar(1);
@@ -812,9 +851,12 @@ export default function WorldForge({
       const t = clock.elapsedTime;
       const charge = isLobby ? clamp01(dramaRef.current) : 0;
 
-      // Progress eases toward the live value and never regresses.
+      // Progress eases toward the live value and never regresses. Rate-capped
+      // so a remount mid-weave (theme swap, reload) builds up instead of
+      // snapping the world together.
       if (!isLobby) {
-        smoothP += (Math.max(smoothP, clamp01(progressRef.current)) - smoothP) * Math.min(1, dt * 1.6);
+        const step = (Math.max(smoothP, clamp01(progressRef.current)) - smoothP) * Math.min(1, dt * 1.6);
+        smoothP += Math.min(step, dt * 0.12);
       }
       const p = smoothP;
 
@@ -970,6 +1012,24 @@ export default function WorldForge({
         sAttr.needsUpdate = true;
       }
 
+      /* energy draw ------------------------------------------------------------ */
+      const drawAlpha = isLobby
+        ? charge * 0.3
+        : (0.5 + musicLevel * 0.35) * (1 - easeInOutCubic(clamp01((p - 0.92) / 0.08)) * 0.8);
+      drawMaterial.opacity += (drawAlpha * gutter - drawMaterial.opacity) * Math.min(1, dt * 2);
+      if (drawMaterial.opacity > 0.02) {
+        const dAttr = drawGeometry.getAttribute("position") as THREE.BufferAttribute;
+        for (let i = 0; i < DRAW; i += 1) {
+          const u = (dSeeds[i * 4] + t * dSeeds[i * 4 + 1]) % 1;
+          const pull = u * u; // accelerates as the heart's grip tightens
+          const radius = 13.5 - 13.1 * pull;
+          const angle = dSeeds[i * 4 + 2] + u * 2.8 * motion.swirl + t * 0.04;
+          const y = THREE.MathUtils.lerp(HEART_Y + dSeeds[i * 4 + 3], HEART_Y, pull);
+          dAttr.setXYZ(i, Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+        }
+        dAttr.needsUpdate = true;
+      }
+
       /* weather ---------------------------------------------------------------- */
       const weatherAlpha = isLobby ? 0.3 + charge * 0.15 : clamp01((p - 0.28) / 0.25) * 0.5;
       weatherMaterial.opacity += (weatherAlpha * gutter - weatherMaterial.opacity) * Math.min(1, dt * 2);
@@ -1044,10 +1104,11 @@ export default function WorldForge({
 
       /* camera ------------------------------------------------------------------ */
       const orbit = t * (isLobby ? 0.35 : 1) * motion.orbit + Math.PI * 0.35;
+      // heartLift widens the end framing so the raised heart stays in shot.
       const radius = isLobby
         ? 17 - charge * 1.2
-        : 17.5 - easeOutCubic(p) * 6 - musicLevel * 0.4;
-      const height = isLobby ? 5.4 : 5.6 - p * 2.2;
+        : 17.5 - easeOutCubic(p) * Math.max(2.5, 6 - heartLift * 0.9) - musicLevel * 0.4;
+      const height = isLobby ? 5.4 : 5.6 - p * Math.max(0.8, 2.2 - heartLift * 0.35);
       const dampXY = 1 - Math.exp(-dt * 2.2);
       const dampZ = 1 - Math.exp(-dt * 1.2);
       tmp.set(
@@ -1058,7 +1119,7 @@ export default function WorldForge({
       camera.position.x += (tmp.x - camera.position.x) * dampXY;
       camera.position.y += (tmp.y - camera.position.y) * dampXY;
       camera.position.z += (tmp.z - camera.position.z) * dampZ;
-      camera.lookAt(0, 1.4 + (isLobby ? 0.4 : p * 1.1), 0);
+      camera.lookAt(0, 1.4 + (isLobby ? 0.4 + heartLift * 0.12 : p * (1.1 + heartLift * 0.45)), 0);
 
       renderer.render(scene, camera);
     };

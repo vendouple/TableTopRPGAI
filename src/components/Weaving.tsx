@@ -59,12 +59,14 @@ export default function Weaving({
     setJoinUrl(`${window.location.origin}/?controller=1&code=${joinCode}`);
   }, [joinCode]);
 
-  const percent = complete ? 100 : Math.min(99, Math.floor(progress * 100));
+  // On complete the hook glides shown-progress to 1, so the counter and the
+  // forge climb those last points together instead of snapping to 100.
+  const percent = complete ? Math.floor(progress * 100) : Math.min(99, Math.floor(progress * 100));
   const activeIndex = complete ? PHASES.length : milestone;
 
   return (
     <div className="weaving screen" data-music-theme={visual.key}>
-      <WorldForge mode="weaving" progress={complete ? 1 : progress} theme={visual.key} />
+      <WorldForge mode="weaving" progress={progress} theme={visual.key} />
       <div className="portal-veil weaving-veil" />
       <div className="weaving-scan" aria-hidden />
 
@@ -92,7 +94,7 @@ export default function Weaving({
 
         <div className="weaving-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
           <div className="weaving-progress-track">
-            <div className="weaving-progress-fill" style={{ width: `${complete ? 100 : progress * 100}%` }} />
+            <div className="weaving-progress-fill" style={{ width: `${progress * 100}%` }} />
           </div>
           <span className="weaving-percent">{percent}%</span>
         </div>
