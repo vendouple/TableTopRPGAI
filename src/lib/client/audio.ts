@@ -126,8 +126,11 @@ export function bgmGetAnalyser(): AnalyserNode | null {
       if (!Ctor) return null;
       audioCtx = new Ctor();
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.82;
+      analyser.fftSize = 512;
+      // Light smoothing only: beat/riff onset detection needs transients to
+      // survive the tap. Consumers that want a lazy swell (musicLevel drives)
+      // re-smooth on their own clock anyway.
+      analyser.smoothingTimeConstant = 0.55;
       analyser.connect(audioCtx.destination);
     }
     for (const deck of [deckA, deckB]) {

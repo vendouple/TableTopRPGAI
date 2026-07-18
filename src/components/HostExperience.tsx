@@ -11,8 +11,14 @@ import StoryPause, { StoryPauseKind } from "@/components/StoryPause";
 import MusicWidget from "@/components/MusicWidget";
 import CosmosCanvas from "@/components/three/CosmosCanvas";
 
-/** How long the forged world holds on screen before the stage takes over. */
-const FINALE_MS = 3200;
+/** How long the forged world holds on screen once its bar has genuinely
+ *  reached 100% — long enough for the shockwave/flare to play. This is NOT
+ *  how long the finale itself runs; see the `settled`-driven logic below. */
+const FINALE_HOLD_MS = 1500;
+/** Hard safety cap on the whole finale, timed from the lobby→weave completion
+ *  edge. Only matters if `progress` somehow never settles (a bug) — normal
+ *  runs finish well inside this via FINALE_HOLD_MS after settling. */
+const FINALE_SAFETY_MS = 9000;
 
 type PauseInfo = { kind: StoryPauseKind; detail?: string; playerName?: string };
 
@@ -102,12 +108,25 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
 
   // The Weaving's monotonic progress — phases ratchet, status changes nudge,
   // and the bar never regresses no matter how the raw dmPhase jumps around.
-  const weave = useWeaveProgress(campaign?.dmPhase, campaign?.dmStatus, storyStarted);
+  // Gated to the weave itself: the lobby's portrait forging emits dmPhase
+  // "sheet" + status churn, which would pre-charge the model to ~90%.
+  const weaveActive = !!campaign && campaign.status === "active" && !storyStarted;
+  const weave = useWeaveProgress(weaveActive, campaign?.dmPhase, campaign?.dmStatus, storyStarted);
 
-  // When the opening finishes, hold the forged world on screen for a beat —
-  // the shockwave finale plays out — before handing over to the stage. On a
-  // fresh mount of an already-running story, skip straight to the stage.
-  const [finaleUntil, setFinaleUntil] = useState(0);
+  // When the opening finishes, hold the forged world on screen until its own
+  // bar has genuinely reached 100%, then linger a beat longer for the
+  // shockwave/flare, before handing over to the stage. This used to be timed
+  // off a fixed wall-clock window — if the bar was still climbing (say 57%)
+  // when that window ran out, the screen cut straight to the live stage with
+  // the animation never finishing. It's now driven by the bar's own state:
+  // `weave.progress` (paced by useWeaveProgress's own aggregate close-out, see
+  // that file) decides when the finale is actually done, not a guessed
+  // duration. `inFinaleWindow` gates all of this to a transition genuinely
+  // observed THIS mount — a fresh mount of an already-running story must
+  // still skip straight to the stage with no finale at all.
+  const inFinaleWindow = useRef(false);
+  const finaleDeadlineRef = useRef(0);
+  const [finaleHoldUntil, setFinaleHoldUntil] = useState<number | null>(null);
   const [, forceRender] = useState(0);
   const prevStoryStarted = useRef<boolean | null>(null);
   useEffect(() => {
@@ -115,11 +134,21 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
     const was = prevStoryStarted.current;
     prevStoryStarted.current = storyStarted;
     if (was === false && storyStarted && campaign.status === "active") {
-      setFinaleUntil(Date.now() + FINALE_MS);
-      const timer = setTimeout(() => forceRender((n) => n + 1), FINALE_MS + 50);
-      return () => clearTimeout(timer);
+      inFinaleWindow.current = true;
+      finaleDeadlineRef.current = Date.now() + FINALE_SAFETY_MS;
+      setFinaleHoldUntil(null);
+      const safety = setTimeout(() => forceRender((n) => n + 1), FINALE_SAFETY_MS + 50);
+      return () => clearTimeout(safety);
     }
   }, [campaign, storyStarted]);
+
+  const settled = inFinaleWindow.current && storyStarted && weave.progress >= 0.999;
+  useEffect(() => {
+    if (!settled || finaleHoldUntil !== null) return;
+    setFinaleHoldUntil(Date.now() + FINALE_HOLD_MS);
+    const timer = setTimeout(() => forceRender((n) => n + 1), FINALE_HOLD_MS + 50);
+    return () => clearTimeout(timer);
+  }, [settled, finaleHoldUntil]);
 
   // The mid-game intermission (join / reconnect / departure). Once shown it
   // lingers until the integration's beats actually land (or a grace timeout),
@@ -165,15 +194,14 @@ export default function HostExperience({ campaignId, onExit }: { campaignId: str
     );
   }
 
-  const inFinale = storyStarted && Date.now() < finaleUntil;
+  const finaleCutoff = finaleHoldUntil ?? finaleDeadlineRef.current;
+  const inFinale = inFinaleWindow.current && storyStarted && Date.now() < finaleCutoff;
   if (!storyStarted || inFinale) {
     return (
       <>
         <Weaving
           title={campaign.isRandomized && !storyStarted ? "Breaking the seal…" : campaign.title}
-          status={campaign.dmStatus}
           progress={weave.progress}
-          milestone={weave.milestone}
           complete={inFinale}
           joinCode={campaign.joinCode}
           theme={musicTheme}

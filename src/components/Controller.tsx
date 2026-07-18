@@ -570,7 +570,13 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                       {player.characterName || player.name}
                       {campaign.partyLeaderId === player.id ? " ♛" : ""}
                     </span>
-                    {pHp ? <span className="party-detail">{pHp.value}/{pHp.maxValue} HP{player.status ? ` · ${player.status}` : ""}</span> : null}
+                    {pHp ? (
+                      <span className="rail-hp mini">
+                        <span className="rail-hp-fill" style={{ width: `${Math.max(0, Math.min(100, (pHp.value / Math.max(pHp.maxValue, 1)) * 100))}%` }} />
+                        <span className="rail-hp-text">{pHp.value}/{pHp.maxValue}</span>
+                      </span>
+                    ) : null}
+                    {player.status ? <span className="party-detail">{player.status}</span> : null}
                     {campaign.showPartyInventories && player.inventory.length ? (
                       <span className="party-detail">Carries: {player.inventory.slice(0, 4).join(", ")}</span>
                     ) : null}
@@ -600,11 +606,13 @@ export default function Controller({ seat, onLeave }: { seat: StoredSeat; onLeav
                           {npc.name}{isGroup && npc.count !== undefined ? ` ×${npc.count}` : ""}
                         </span>
                         {nHp ? (
-                          <span className="party-detail">
-                            {nHp.value}/{nHp.maxValue} HP
-                            {isGroup && npc.count !== undefined ? ` · ${npc.count} left${npc.maxCount ? `/${npc.maxCount}` : ""}` : ""}
-                            {npc.status ? ` · ${npc.status}` : ""}
+                          <span className="rail-hp mini">
+                            <span className="rail-hp-fill" style={{ width: `${Math.max(0, Math.min(100, (nHp.value / Math.max(nHp.maxValue, 1)) * 100))}%` }} />
+                            <span className="rail-hp-text">{nHp.value}/{nHp.maxValue}</span>
                           </span>
+                        ) : null}
+                        {isGroup && npc.count !== undefined ? (
+                          <span className="party-detail">{npc.count} left{npc.maxCount ? `/${npc.maxCount}` : ""}{npc.status ? ` · ${npc.status}` : ""}</span>
                         ) : npc.status ? <span className="party-detail">{npc.status}</span> : null}
                       </>
                     );

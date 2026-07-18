@@ -5,47 +5,27 @@ import { QRCodeSVG } from "qrcode.react";
 import WorldForge from "@/components/three/WorldForge";
 import { themeVisual, ThemeKey } from "@/components/three/themeVisuals";
 
-const PHASES: Array<{ label: string }> = [
-  { label: "Reaching the Weaver" },
-  { label: "Writing the world" },
-  { label: "Composing the opening" },
-  { label: "Painting the vista" },
-  { label: "Forging the heroes" },
-  { label: "Lighting the stage" }
-];
-
-/** Forge-stage word for the HUD, by progress quartile. */
-function forgeStage(progress: number, complete: boolean) {
-  if (complete) return "The world holds";
-  if (progress < 0.25) return "Gathering the threads";
-  if (progress < 0.5) return "Weaving the fabric";
-  if (progress < 0.78) return "Raising the world";
-  return "Stabilizing the tale";
-}
-
 /**
- * Full-screen interlude between the lobby and the living stage. The Worldforge
- * assembles the campaign's world live in 3D — scattered wireframe fragments
- * tractor in, lock, and materialize — driven by a monotonic progress model
- * (`useWeaveProgress` upstream) so the bar and the build only ever advance.
- * The join summons stays on screen so late heroes can scan in mid-weave; the
- * server seats them the moment the opening is done.
+ * Full-screen interlude between the lobby and the living stage — and it is
+ * ALL the Worldforge now. The campaign's world assembles live in 3D while the
+ * ground inscription ring doubles as the progress sigil: a bright arc
+ * inscribes it clockwise, a percent glyph rides its near edge, and the title
+ * hangs in the sky — every readout lives inside the three.js scene. The only
+ * DOM chrome left is the standing join summons (late heroes must be able to
+ * scan a real QR code) and an invisible progressbar for screen readers.
+ * Progress is monotonic (`useWeaveProgress` upstream), so the build only ever
+ * advances.
  */
 export default function Weaving({
   title,
-  status,
   progress,
-  milestone,
   complete = false,
   joinCode,
   theme = "none"
 }: {
   title: string;
-  status?: string;
   /** 0..1, monotonic — from useWeaveProgress. */
   progress: number;
-  /** Highest constellation node reached (index into PHASES). */
-  milestone: number;
   /** True once the opening is woven: the forge finishes and flares. */
   complete?: boolean;
   joinCode?: string;
@@ -59,47 +39,24 @@ export default function Weaving({
     setJoinUrl(`${window.location.origin}/?controller=1&code=${joinCode}`);
   }, [joinCode]);
 
-  // On complete the hook glides shown-progress to 1, so the counter and the
-  // forge climb those last points together instead of snapping to 100.
   const percent = complete ? Math.floor(progress * 100) : Math.min(99, Math.floor(progress * 100));
-  const activeIndex = complete ? PHASES.length : milestone;
 
   return (
     <div className="weaving screen" data-music-theme={visual.key}>
-      <WorldForge mode="weaving" progress={progress} theme={visual.key} />
+      <WorldForge mode="weaving" progress={progress} theme={visual.key} title={title} />
       <div className="portal-veil weaving-veil" />
       <div className="weaving-scan" aria-hidden />
 
-      <header className="weaving-hud" aria-hidden>
-        <span className="weaving-hud-label">{visual.copy.kicker}</span>
-        <span className="weaving-hud-stage">{forgeStage(progress, complete)}</span>
-      </header>
-
-      <div className="weaving-center">
-        <span className="weaving-kicker">{visual.copy.kicker}</span>
-        <h1 className={`weaving-title ${complete ? "forged" : ""}`}>{title}</h1>
-
-        <div className="weaving-constellation">
-          {PHASES.map((item, index) => (
-            <div
-              key={item.label}
-              className={`weave-node ${index < activeIndex ? "done" : index === activeIndex ? "active" : ""}`}
-            >
-              <span className="weave-star" aria-hidden />
-              <span className="weave-label">{item.label}</span>
-              {index < PHASES.length - 1 ? <span className="weave-thread" aria-hidden /> : null}
-            </div>
-          ))}
-        </div>
-
-        <div className="weaving-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
-          <div className="weaving-progress-track">
-            <div className="weaving-progress-fill" style={{ width: `${progress * 100}%` }} />
-          </div>
-          <span className="weaving-percent">{percent}%</span>
-        </div>
-
-        <p className="weaving-status">{complete ? visual.copy.kicker : status || visual.copy.gathering}</p>
+      {/* The scene carries every visible readout; this is for screen readers. */}
+      <div
+        className="sr-only"
+        role="progressbar"
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`Weaving ${title}`}
+      >
+        {percent}%
       </div>
 
       {joinCode ? (

@@ -255,6 +255,123 @@ const KITS: Record<ThemeKey, LandmarkDef[]> = {
   ]
 };
 
+/* ── theme signature relics ────────────────────────────────────────────────
+   Each genre gets one emblem — its signature made literal (a crowned crystal,
+   a ringed station, drifting tombstones, a streetlamp lost in the rain, a
+   wagon wheel, a dead gear…) — that orbits the unforged world in BOTH the
+   lobby and the weave. Two fly at opposite phases so one is always in shot. */
+
+const EMBLEMS: Record<ThemeKey, { prims: Prim[]; y: number }> = {
+  none: {
+    y: 4.6,
+    prims: [
+      { g: "torus", a: [1.05, 0.045, 6, 30] },
+      { g: "oct", a: [0.42] }
+    ]
+  },
+  fantasy: {
+    // A crowned crystal with attendant shards — arcana adrift.
+    y: 5.2,
+    prims: [
+      { g: "oct", a: [0.6] },
+      { g: "torus", a: [1.05, 0.04, 5, 26], r: [Math.PI / 2.4, 0, 0] },
+      { g: "tet", a: [0.2], p: [1.05, 0.35, 0] },
+      { g: "tet", a: [0.15], p: [-0.95, -0.4, 0.25] }
+    ]
+  },
+  scifi: {
+    // A ringed orbital station with a solar truss.
+    y: 5.6,
+    prims: [
+      { g: "cyl", a: [0.26, 0.26, 1.15, 8] },
+      { g: "torus", a: [0.95, 0.05, 6, 30], r: [Math.PI / 2, 0, 0] },
+      { g: "box", a: [2.5, 0.05, 0.5] }
+    ]
+  },
+  horror: {
+    // Uprooted tombstones and a skull-round stone, circling like carrion.
+    y: 3.6,
+    prims: [
+      { g: "box", a: [0.7, 1.1, 0.14], p: [0, 0.25, 0], r: [0, 0, 0.16] },
+      { g: "box", a: [0.5, 0.75, 0.12], p: [0.8, -0.15, 0.25], r: [0, 0.35, -0.24] },
+      { g: "sphere", a: [0.2, 6, 5], p: [-0.55, -0.35, 0.1] }
+    ]
+  },
+  noir: {
+    // A streetlamp torn loose from its corner, still leaning into the rain.
+    y: 4.4,
+    prims: [
+      { g: "cyl", a: [0.05, 0.07, 2.5, 6] },
+      { g: "box", a: [0.75, 0.1, 0.28], p: [0.32, 1.28, 0] },
+      { g: "cone", a: [0.34, 0.45, 6], p: [0.58, 1.05, 0], r: [Math.PI, 0, 0] }
+    ]
+  },
+  modern: {
+    // A comms satellite: bus, twin panels, whip antenna.
+    y: 5.4,
+    prims: [
+      { g: "box", a: [0.55, 0.55, 0.9] },
+      { g: "box", a: [1.9, 0.04, 0.55], p: [1.35, 0, 0] },
+      { g: "box", a: [1.9, 0.04, 0.55], p: [-1.35, 0, 0] },
+      { g: "cyl", a: [0.025, 0.025, 0.8, 4], p: [0, 0.65, 0] }
+    ]
+  },
+  western: {
+    // A wagon wheel, spokes and all, tumbling over the frontier.
+    y: 3.9,
+    prims: [
+      { g: "torus", a: [0.85, 0.08, 6, 20] },
+      { g: "box", a: [1.62, 0.08, 0.08] },
+      { g: "box", a: [1.62, 0.08, 0.08], r: [0, 0, Math.PI / 3] },
+      { g: "box", a: [1.62, 0.08, 0.08], r: [0, 0, -Math.PI / 3] }
+    ]
+  },
+  postapoc: {
+    // A dead gear from some machine the old world forgot to finish.
+    y: 4.8,
+    prims: [
+      { g: "torus", a: [0.85, 0.14, 5, 9], r: [Math.PI / 2, 0, 0] },
+      ...ring("box", [0.2, 0.32, 0.2], 6, 1.0, 0)
+    ]
+  }
+};
+
+/* Far-orbit debris silhouettes, themed: crystals, hull plates, skull-round
+   stones, glass slivers, planks… depth dressing that reads in genre. */
+const DEBRIS_SHAPE: Record<ThemeKey, (rand: () => number) => THREE.BufferGeometry> = {
+  none: (r) => new THREE.TetrahedronGeometry(0.22 + r() * 0.3, 0),
+  fantasy: (r) => new THREE.OctahedronGeometry(0.2 + r() * 0.26, 0),
+  scifi: (r) => new THREE.BoxGeometry(0.34 + r() * 0.3, 0.1 + r() * 0.1, 0.22 + r() * 0.22),
+  horror: (r) => new THREE.SphereGeometry(0.15 + r() * 0.16, 5, 4),
+  noir: (r) => new THREE.BoxGeometry(0.06, 0.4 + r() * 0.45, 0.06),
+  modern: (r) => new THREE.IcosahedronGeometry(0.17 + r() * 0.18, 0),
+  western: (r) => new THREE.BoxGeometry(0.45 + r() * 0.35, 0.07, 0.16),
+  postapoc: (r) => new THREE.TetrahedronGeometry(0.26 + r() * 0.34, 0)
+};
+
+/* ── per-theme audio flavor ────────────────────────────────────────────────
+   Beyond the bass beat (which fires the ground ripple), the music drives the
+   scene through three bands — bass, mids, treble — plus a mid-band onset
+   detector (the riff). Each genre reacts through its own channels so its
+   music feels alive in its own way: noir rain pours harder with the mids,
+   scifi rings spin up on treble, postapoc surges on the riff, horror lights
+   sag under the swell.
+     rush    — mids accelerate the theme weather (rain / ash / embers)
+     twinkle — treble shimmers the dust, weather, and vortex motes
+     spin    — treble spins the ascension rings and foundation spokes
+     surge   — riff onsets flare the heart, emblems, and sigil
+     sag     — mids strain the lights (candle / reactor gutter deepens) */
+const AUDIO_FLAVOR: Record<ThemeKey, { rush: number; twinkle: number; spin: number; surge: number; sag: number }> = {
+  none: { rush: 0.5, twinkle: 0.6, spin: 0.4, surge: 0.6, sag: 0 },
+  fantasy: { rush: 0.9, twinkle: 1.1, spin: 0.4, surge: 0.7, sag: 0 },
+  scifi: { rush: 0.4, twinkle: 0.8, spin: 1.6, surge: 0.9, sag: 0 },
+  horror: { rush: 0.7, twinkle: 0.3, spin: 0.2, surge: 0.4, sag: 1.2 },
+  noir: { rush: 1.5, twinkle: 0.5, spin: 0.3, surge: 0.4, sag: 0.5 },
+  modern: { rush: 0.6, twinkle: 1.0, spin: 1.1, surge: 0.7, sag: 0 },
+  western: { rush: 1.2, twinkle: 0.6, spin: 0.4, surge: 0.6, sag: 0.6 },
+  postapoc: { rush: 1.0, twinkle: 0.5, spin: 0.5, surge: 1.65, sag: 0.8 }
+};
+
 /* ── the materialization shader ────────────────────────────────────────────
    One MeshStandardMaterial per landmark, extended with a world-space reveal
    front: fragments above uReveal are discarded, and a thin emissive scan band
@@ -358,7 +475,8 @@ export default function WorldForge({
   progress = 0,
   drama = 0.5,
   accent,
-  theme = "none"
+  theme = "none",
+  title = ""
 }: {
   /** "lobby": the unforged fragments drift, charged by `drama`. "weaving": `progress` assembles the world. */
   mode?: "lobby" | "weaving";
@@ -368,12 +486,18 @@ export default function WorldForge({
   drama?: number;
   accent?: string;
   theme?: ThemeKey | string | null;
+  /** Weaving only: drawn into the in-scene readout (kicker + title + percent). */
+  title?: string;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef(progress);
   progressRef.current = progress;
   const dramaRef = useRef(drama);
   dramaRef.current = drama;
+  // Ref, not an effect dep: a sealed campaign's title is revealed mid-finale,
+  // and rebuilding the whole scene for a caption change would reset the world.
+  const titleRef = useRef(title);
+  titleRef.current = title;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -393,6 +517,8 @@ export default function WorldForge({
 
     const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 220);
     camera.position.set(0, 4.6, 16.5);
+    // In the scene graph so camera-anchored children (the readout) render.
+    scene.add(camera);
 
     const accentColor = new THREE.Color(accentHex);
     const brightColor = new THREE.Color(visual.accentBright);
@@ -476,23 +602,64 @@ export default function WorldForge({
       };
     });
 
-    /* -- far debris: never assembles, pure depth dressing ------------------ */
+    /* -- far debris: never assembles, pure depth dressing (themed) ---------- */
+    const debrisShape = DEBRIS_SHAPE[visual.key] || DEBRIS_SHAPE.none;
     const debris: Array<{ line: THREE.LineSegments; radius: number; y: number; seed: number; speed: number }> = [];
     const debrisMaterial = new THREE.LineBasicMaterial({ color: accentColor, transparent: true, opacity: 0.1 });
     disposables.push(debrisMaterial);
-    for (let i = 0; i < 10; i += 1) {
-      const geometry = new THREE.EdgesGeometry(new THREE.TetrahedronGeometry(0.22 + rand() * 0.3, 0));
+    for (let i = 0; i < 14; i += 1) {
+      const geometry = new THREE.EdgesGeometry(debrisShape(rand));
       const line = new THREE.LineSegments(geometry, debrisMaterial);
       scene.add(line);
       debris.push({ line, radius: 15 + rand() * 9, y: 1 + rand() * 8, seed: rand() * Math.PI * 2, speed: 0.35 + rand() * 0.6 });
       disposables.push(geometry);
     }
 
+    /* -- theme emblems: the genre's signature relics, orbiting mid-field ---- */
+    const emblemDef = EMBLEMS[visual.key] || EMBLEMS.none;
+    const emblemTemp = new THREE.Group();
+    const emblemTempGeoms: THREE.BufferGeometry[] = [];
+    for (const prim of emblemDef.prims) {
+      const geometry = makeGeometry(prim);
+      const mesh = new THREE.Mesh(geometry);
+      if (prim.p) mesh.position.set(...prim.p);
+      if (prim.r) mesh.rotation.set(...prim.r);
+      emblemTemp.add(mesh);
+      emblemTempGeoms.push(geometry);
+    }
+    const emblemGeometry = buildWireframe(emblemTemp);
+    for (const geometry of emblemTempGeoms) geometry.dispose();
+    disposables.push(emblemGeometry);
+    const emblems: Array<{ group: THREE.Group; material: THREE.LineBasicMaterial; phase: number; radius: number; y: number; dir: number }> = [];
+    for (let i = 0; i < 2; i += 1) {
+      const material = new THREE.LineBasicMaterial({ color: i === 0 ? accentColor : secondaryColor, transparent: true, opacity: 0 });
+      const group = new THREE.Group();
+      group.add(new THREE.LineSegments(emblemGeometry, material));
+      scene.add(group);
+      emblems.push({
+        group,
+        material,
+        phase: i * Math.PI + rand() * 0.8,
+        radius: 10.5 + i * 1.9,
+        y: emblemDef.y + (i ? 1.7 : 0),
+        dir: i ? -1 : 1
+      });
+      disposables.push(material);
+    }
+
     /* -- foundation grid (holographic scaffolding) ------------------------- */
     const gridUniforms = {
       uTime: { value: 0 },
+      // Accumulated spoke drift — advanced on the CPU so treble can speed it
+      // up without the pattern jumping.
+      uSpin: { value: 0 },
       uEnergy: { value: 0.4 },
       uFade: { value: 1 },
+      // Beat-driven ripple: uPulseR is the ring's current radius, uPulseA its
+      // strength. The BGM's bass onsets (or a quiet metronome fallback) fire
+      // it, so the ground breathes in time with the music.
+      uPulseR: { value: 0 },
+      uPulseA: { value: 0 },
       uColorA: { value: accentColor.clone() },
       uColorB: { value: secondaryColor.clone() }
     };
@@ -510,17 +677,18 @@ export default function WorldForge({
       ].join("\n"),
       fragmentShader: [
         "varying vec2 vUv;",
-        "uniform float uTime; uniform float uEnergy; uniform float uFade;",
+        "uniform float uTime; uniform float uSpin; uniform float uEnergy; uniform float uFade;",
+        "uniform float uPulseR; uniform float uPulseA;",
         "uniform vec3 uColorA; uniform vec3 uColorB;",
         "void main() {",
         "  vec2 p = (vUv - 0.5) * 40.0;",
         "  float r = length(p);",
         "  float ang = atan(p.y, p.x) / 6.2831853;",
         "  float ringLine = 1.0 - smoothstep(0.0, 0.09, abs(fract(r / 1.7) - 0.5) * 1.7);",
-        "  float spoke = 1.0 - smoothstep(0.0, 0.055, abs(fract(ang * 24.0 + uTime * 0.012) - 0.5) * (6.2831853 / 24.0) * r);",
-        "  float pulse = exp(-abs(r - fract(uTime * 0.16) * 17.0) * 1.5);",
+        "  float spoke = 1.0 - smoothstep(0.0, 0.055, abs(fract(ang * 24.0 + uSpin) - 0.5) * (6.2831853 / 24.0) * r);",
+        "  float pulse = exp(-abs(r - uPulseR) * 1.6) * uPulseA;",
         "  float falloff = exp(-r * 0.17);",
-        "  float glow = (ringLine * 0.42 + spoke * 0.26) * falloff + pulse * 0.55 * falloff;",
+        "  float glow = (ringLine * 0.42 + spoke * 0.26) * falloff + pulse * 0.7 * falloff;",
         "  vec3 col = mix(uColorB, uColorA, clamp(ringLine + pulse, 0.0, 1.0));",
         "  float a = glow * uEnergy * uFade;",
         "  gl_FragColor = vec4(col * a, a);",
@@ -559,6 +727,194 @@ export default function WorldForge({
     glyphRing.position.y = 0.02;
     scene.add(glyphRing);
     disposables.push(glyphTexture, glyphGeometry, glyphMaterial);
+
+    /* -- the sigil IS the progress meter (weaving) ---------------------------
+       No sweeping bar: the whole inscription CHARGES like a ritual circle.
+       Every glyph glows — faint at 0%, white-hot at 100% — each letter
+       breathing on its own clock, and a curtain of embers rises off the ring
+       like a portal opening, taller and denser the further the weave gets. */
+    const sigilUniforms = {
+      uMap: { value: glyphTexture },
+      uCharge: { value: 0 },
+      uTime: { value: 0 },
+      uBeat: { value: 0 },
+      uSurge: { value: 0 },
+      uColor: { value: accentColor.clone() },
+      uHot: { value: brightColor.clone() }
+    };
+    const sigilVertexShader = [
+      "varying vec2 vUv;",
+      "void main() {",
+      "  vUv = uv;",
+      "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+      "}"
+    ].join("\n");
+    const sigilGlowMaterial = new THREE.ShaderMaterial({
+      uniforms: sigilUniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      vertexShader: sigilVertexShader,
+      fragmentShader: [
+        "varying vec2 vUv;",
+        "uniform sampler2D uMap;",
+        "uniform float uCharge; uniform float uTime; uniform float uBeat; uniform float uSurge;",
+        "uniform vec3 uColor; uniform vec3 uHot;",
+        "void main() {",
+        "  vec4 tex = texture2D(uMap, vUv);",
+        "  float id = floor(vUv.x * 40.0);",
+        "  float twinkle = 0.72 + 0.28 * sin(uTime * (1.1 + mod(id, 3.0) * 0.5) + id * 13.7);",
+        "  float glow = uCharge * (0.5 + 0.9 * uCharge) * twinkle + (uBeat * 0.5 + uSurge * 0.45) * (0.25 + uCharge);",
+        "  vec3 col = mix(uColor, uHot, clamp(uCharge * 0.7 + uBeat * 0.35, 0.0, 1.0));",
+        "  float alpha = tex.a * glow;",
+        "  gl_FragColor = vec4(col * alpha, alpha);",
+        "}"
+      ].join("\n")
+    });
+    const sigilGlow = new THREE.Mesh(glyphGeometry, sigilGlowMaterial);
+    sigilGlow.rotation.x = -Math.PI / 2;
+    sigilGlow.position.y = 0.03;
+    sigilGlow.visible = !isLobby;
+    scene.add(sigilGlow);
+    disposables.push(sigilGlowMaterial);
+
+    // Soft under-glow band beneath the inscription — the circle's charge.
+    const sigilBandUniforms = {
+      uCharge: { value: 0 },
+      uBeat: { value: 0 },
+      uColor: { value: accentColor.clone() }
+    };
+    const sigilBandMaterial = new THREE.ShaderMaterial({
+      uniforms: sigilBandUniforms,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      vertexShader: sigilVertexShader,
+      fragmentShader: [
+        "varying vec2 vUv;",
+        "uniform float uCharge; uniform float uBeat;",
+        "uniform vec3 uColor;",
+        "void main() {",
+        "  float radial = smoothstep(0.0, 0.4, vUv.y) * smoothstep(1.0, 0.6, vUv.y);",
+        "  float alpha = radial * uCharge * (0.16 + uBeat * 0.2);",
+        "  gl_FragColor = vec4(uColor * alpha, alpha);",
+        "}"
+      ].join("\n")
+    });
+    const sigilBand = new THREE.Mesh(new THREE.RingGeometry(5.15, 6.95, 96, 1), sigilBandMaterial);
+    const bandUv = sigilBand.geometry.getAttribute("uv") as THREE.BufferAttribute;
+    for (let j = 0; j <= 1; j += 1) {
+      for (let i = 0; i <= 96; i += 1) {
+        bandUv.setXY(j * 97 + i, i / 96, j);
+      }
+    }
+    bandUv.needsUpdate = true;
+    sigilBand.rotation.x = -Math.PI / 2;
+    sigilBand.position.y = 0.026;
+    sigilBand.visible = !isLobby;
+    scene.add(sigilBand);
+    disposables.push(sigilBand.geometry, sigilBandMaterial);
+
+    // Ritual embers: born on the inscription, rising in a gentle inward
+    // spiral. Height, pace, and brightness all scale with the charge.
+    const RITUAL = 520;
+    const ritualSeeds = new Float32Array(RITUAL * 4); // angle, phase, speed, radial jitter
+    for (let i = 0; i < RITUAL; i += 1) {
+      ritualSeeds[i * 4] = rand() * Math.PI * 2;
+      ritualSeeds[i * 4 + 1] = rand();
+      ritualSeeds[i * 4 + 2] = 0.5 + rand() * 0.7;
+      ritualSeeds[i * 4 + 3] = (rand() - 0.5) * 0.9;
+    }
+    const ritualGeometry = new THREE.BufferGeometry();
+    ritualGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(RITUAL * 3), 3));
+    const ritualMaterial = new THREE.PointsMaterial({
+      map: sparkTexture,
+      color: brightColor,
+      size: 0.055,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+    const ritual = new THREE.Points(ritualGeometry, ritualMaterial);
+    ritual.visible = !isLobby;
+    scene.add(ritual);
+    disposables.push(ritualGeometry, ritualMaterial);
+
+    /* -- the inscription readout (weaving) -----------------------------------
+       Kicker, title, and the percent — drawn onto a canvas texture and
+       billboarded at the sigil's near edge, so every readout lives inside the
+       scene. It follows the camera's azimuth to always face the room. */
+    const rootStyle = getComputedStyle(document.documentElement);
+    const displayFont = rootStyle.getPropertyValue("--font-display").trim() || "serif";
+    const readoutCanvas = document.createElement("canvas");
+    readoutCanvas.width = 1024;
+    readoutCanvas.height = 640;
+    const readoutCtx = readoutCanvas.getContext("2d")!;
+    const readoutTexture = new THREE.CanvasTexture(readoutCanvas);
+    readoutTexture.colorSpace = THREE.SRGBColorSpace;
+    readoutTexture.anisotropy = anisotropy;
+    let drawnPercent = -1;
+    let drawnTitle: string | null = null;
+    const drawReadout = (pct: number, titleText: string) => {
+      const ctx = readoutCtx;
+      ctx.clearRect(0, 0, 1024, 640);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      // Kicker — tracked-out micro label.
+      ctx.font = `600 30px ${displayFont}`;
+      try { (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = "10px"; } catch { /* older canvas */ }
+      ctx.fillStyle = accentHex;
+      ctx.globalAlpha = 0.85;
+      ctx.shadowColor = accentHex;
+      ctx.shadowBlur = 16;
+      ctx.fillText(visual.copy.kicker.toUpperCase(), 512, 72);
+      // Title — fitted to width.
+      let size = 84;
+      ctx.font = `700 ${size}px ${displayFont}`;
+      while (size > 38 && ctx.measureText(titleText).width > 944) {
+        size -= 4;
+        ctx.font = `700 ${size}px ${displayFont}`;
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#f2ead8";
+      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+      ctx.shadowBlur = 22;
+      ctx.fillText(titleText, 512, 192);
+      // The percent, burning big.
+      try { (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = "0px"; } catch { /* older canvas */ }
+      ctx.font = `700 300px ${displayFont}`;
+      ctx.fillStyle = visual.accentBright;
+      ctx.shadowColor = accentHex;
+      ctx.shadowBlur = 42;
+      ctx.fillText(String(pct), 512, 512);
+      ctx.font = `600 58px ${displayFont}`;
+      ctx.globalAlpha = 0.75;
+      ctx.fillText("%", 512, 596);
+      ctx.globalAlpha = 1;
+      readoutTexture.needsUpdate = true;
+    };
+    // The display font may not be resolved on first draw (this scene can be
+    // the page's only user of it) — redraw once it lands.
+    document.fonts?.load(`700 100px ${displayFont}`).then(() => { drawnPercent = -1; }).catch(() => {});
+    const readoutMaterial = new THREE.SpriteMaterial({
+      map: readoutTexture,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      depthTest: false
+    });
+    const readout = new THREE.Sprite(readoutMaterial);
+    readout.scale.set(4.4, 2.75, 1);
+    readout.renderOrder = 20;
+    readout.visible = !isLobby;
+    // A child of the CAMERA, not the world: it holds one screen position no
+    // matter how far the finale zooms in, so it can never be cropped.
+    camera.add(readout);
+    disposables.push(readoutTexture, readoutMaterial);
 
     /* -- the worldheart + light column -------------------------------------- */
     // The heart must hover clear of the tallest landmark — kits differ (the
@@ -615,6 +971,41 @@ export default function WorldForge({
     beam.position.y = 0.6 + (HEART_Y - 0.6) / 2;
     scene.add(beam);
     disposables.push(beamTexture, beam.geometry, beamMaterial);
+
+    /* -- ascension rings: halos that ignite AROUND the whole island world ---
+       Weaving-only spectacle that escalates with progress: each ring wakes as
+       the weave crosses its threshold (with a spark burst at the heart), so
+       the sky visibly gains structure the closer the world is to holding.
+       They orbit OUTSIDE everything solid — inner radius clears the island +
+       landmarks (~5.4) and the ground sigil (6.65), tilts stay shallow so the
+       widest ring never dips below the foundation or up into the heart — so
+       nothing ever clips through them. */
+    const ascRings: Array<{ mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; threshold: number; tilt: number; speed: number; phase: number; lit: boolean }> = [];
+    const RING_Y = 2.3;
+    for (let i = 0; i < 5; i += 1) {
+      const geometry = new THREE.TorusGeometry(6.9 + i * 0.7, 0.016 + i * 0.004, 6, 128);
+      const material = new THREE.MeshBasicMaterial({
+        color: i % 2 ? secondaryColor : accentColor,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.y = RING_Y;
+      mesh.visible = !isLobby;
+      scene.add(mesh);
+      ascRings.push({
+        mesh,
+        material,
+        threshold: 0.18 + i * 0.16,
+        tilt: (0.09 + i * 0.02) * (i % 2 ? -1 : 1),
+        speed: (0.22 + i * 0.09) * (i % 2 ? -1 : 1),
+        phase: i * 1.3,
+        lit: false
+      });
+      disposables.push(geometry, material);
+    }
 
     /* -- stardust vortex ----------------------------------------------------
        Contracts and accelerates as the world forges; at 100% what remains
@@ -817,6 +1208,34 @@ export default function WorldForge({
     scene.add(flash);
     disposables.push(flashMaterial);
 
+    /* -- progress ripples: a ground ring races outward each eighth of the
+       weave, so every stretch of progress lands as a visible pulse. -------- */
+    const ripples: Array<{ mesh: THREE.Mesh; material: THREE.MeshBasicMaterial; age: number; alive: boolean }> = [];
+    for (let i = 0; i < 3; i += 1) {
+      const material = new THREE.MeshBasicMaterial({
+        color: accentColor,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide
+      });
+      const mesh = new THREE.Mesh(new THREE.TorusGeometry(1, 0.035, 6, 72), material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = 0.06;
+      mesh.visible = false;
+      scene.add(mesh);
+      ripples.push({ mesh, material, age: 0, alive: false });
+      disposables.push(mesh.geometry, material);
+    }
+    let rippleStep = 0;
+    const spawnRipple = () => {
+      const ripple = ripples.find((r) => !r.alive) || ripples[0];
+      ripple.age = 0;
+      ripple.alive = true;
+      ripple.mesh.visible = true;
+    };
+
     /* -- pointer parallax ---------------------------------------------------- */
     const pointer = { x: 0, y: 0 };
     const onPointerMove = (event: PointerEvent) => {
@@ -837,11 +1256,36 @@ export default function WorldForge({
 
     /* -- animation ------------------------------------------------------------ */
     const clock = new THREE.Clock();
+    const flavor = AUDIO_FLAVOR[visual.key] || AUDIO_FLAVOR.none;
     let frame = 0;
     let smoothP = isLobby ? 0 : Math.min(0.04, progressRef.current);
     let finaleT = -1;
     let freqData: Uint8Array<ArrayBuffer> | null = null;
     let musicLevel = 0;
+    // Beat tracker: bass onsets fire the ground pulse (and kick the heart +
+    // sigil) on the music's actual beat. Fires on a rising edge over a slow
+    // envelope — with a TIGHT margin so it catches real kicks readily, not
+    // just the loudest spikes — and a tempo catch-up guarantees a pulse at
+    // least every ~1s while music plays. With no analyser it falls back to a
+    // quiet metronome.
+    let bassPrev = 0;
+    let bassAvg = 0;
+    let beatCool = 0;
+    let beatKick = 0;
+    let pulseT = 1;
+    let lastBeatAt = -10;
+    // Mid/treble bands + the riff detector (mid-band onsets): each genre's
+    // AUDIO_FLAVOR routes these into its own channels.
+    let midLevel = 0;
+    let trebleLevel = 0;
+    let midAvg = 0;
+    let midCool = 0;
+    let midKick = 0;
+    // Accumulated phases, so band-driven speed changes never jump the pattern.
+    let weatherPhase = 0;
+    let gridSpin = 0;
+    let sigilSpin = 0;
+    let ritualPhase = 0;
     const tmp = new THREE.Vector3();
     const tmpB = new THREE.Vector3();
     const emitter = new THREE.Vector3();
@@ -862,25 +1306,75 @@ export default function WorldForge({
 
       // Music drive from the shared BGM analyser (silent fallback: slow sine).
       const analyser = bgmGetAnalyser();
+      beatCool -= dt;
+      midCool -= dt;
+      let beatNow = false;
       if (analyser) {
         if (!freqData || freqData.length !== analyser.frequencyBinCount) {
           freqData = new Uint8Array(analyser.frequencyBinCount);
         }
         analyser.getByteFrequencyData(freqData);
-        let sum = 0;
-        const bins = Math.max(8, Math.floor(freqData.length * 0.25));
-        for (let i = 0; i < bins; i += 1) sum += freqData[i];
-        musicLevel += (sum / (bins * 255) - musicLevel) * Math.min(1, dt * 8);
+        const nBins = freqData.length;
+        const band = (from: number, to: number) => {
+          const a = Math.floor(nBins * from);
+          const b = Math.max(a + 1, Math.floor(nBins * to));
+          let sum = 0;
+          for (let i = a; i < b; i += 1) sum += freqData![i];
+          return sum / ((b - a) * 255);
+        };
+        const bass = band(0, 0.09);
+        const mid = band(0.1, 0.42);
+        const treble = band(0.45, 0.9);
+        musicLevel += (band(0, 0.25) - musicLevel) * Math.min(1, dt * 8);
+        midLevel += (mid - midLevel) * Math.min(1, dt * 7);
+        trebleLevel += (treble - trebleLevel) * Math.min(1, dt * 7);
+        // Beat: a rising bass edge over its slow envelope. The margin is
+        // barely above the average at all — almost any local rise qualifies —
+        // and the average itself re-catches quickly after each hit so the
+        // NEXT beat doesn't need to wait for a quiet gap first. A short tempo
+        // catch-up backstops the rest: the pulse should read as frequent even
+        // on material the transient detector doesn't cleanly catch.
+        bassAvg += (bass - bassAvg) * Math.min(1, dt * 1.8);
+        const rising = bass - bassPrev > 0.006;
+        bassPrev += (bass - bassPrev) * Math.min(1, dt * 14);
+        if (beatCool <= 0 && bass > 0.045 && rising && bass > bassAvg * 1.03 + 0.004) beatNow = true;
+        if (beatCool <= 0 && !beatNow && musicLevel > 0.04 && t - lastBeatAt > 0.8) beatNow = true;
+        // The riff: mid-band onsets (stabs, snares, lead hits) — same loose
+        // margin, so a genre's riff (postapoc's especially) reads as a beat
+        // of its own instead of an occasional accent.
+        midAvg += (mid - midAvg) * Math.min(1, dt * 1.8);
+        if (midCool <= 0 && mid > 0.05 && mid > midAvg * 1.04 + 0.003) {
+          midKick = 1;
+          midCool = 0.16;
+        }
       } else {
         musicLevel += ((0.22 + Math.sin(t * 0.9) * 0.1) - musicLevel) * Math.min(1, dt * 2);
+        midLevel += ((0.16 + Math.sin(t * 0.63 + 1.2) * 0.08) - midLevel) * Math.min(1, dt * 2);
+        trebleLevel += ((0.12 + Math.sin(t * 1.1 + 2.4) * 0.06) - trebleLevel) * Math.min(1, dt * 2);
+        if (beatCool <= 0 && t - lastBeatAt >= 1.9) beatNow = true;
       }
+      if (beatNow) {
+        beatCool = 0.14;
+        lastBeatAt = t;
+        pulseT = 0;
+        beatKick = 1;
+      }
+      pulseT = Math.min(1.2, pulseT + dt / 0.95);
+      // Snappier decay on both kicks — an instant attack (set to 1 on
+      // detection) with a fast fade reads as a hit, not a slow swell.
+      beatKick = Math.max(0, beatKick - dt * 3.6);
+      midKick = Math.max(0, midKick - dt * 3.2);
+      const surge = midKick * flavor.surge;
 
-      // Theme light gutter — layered sines so candlelight sputters organically.
+      // Theme light gutter — layered sines so candlelight sputters organically,
+      // plus the flavor's sag: horror candles and wasteland reactors strain
+      // under the music's swells.
       let gutter = 1;
       if (motion.flicker > 0) {
         const g = Math.sin(t * 11.3) * Math.sin(t * 5.1 + 1.7) * Math.sin(t * 2.3 + 4.2);
         gutter = 1 - motion.flicker * (0.12 + 0.3 * Math.max(0, g));
       }
+      if (flavor.sag > 0) gutter *= 1 - Math.min(0.35, flavor.sag * midLevel * 0.3);
 
       /* landmarks: drift → tractor in → lock → materialize ------------------ */
       let frontier: Landmark | null = null;
@@ -971,6 +1465,52 @@ export default function WorldForge({
         burst.material.opacity = (1 - k) * 0.95;
       }
 
+      /* ascension rings -------------------------------------------------------- */
+      if (!isLobby) {
+        for (const halo of ascRings) {
+          const on = p >= halo.threshold;
+          if (on && !halo.lit) {
+            halo.lit = true;
+            spawnBurst(tmpB.set(0, HEART_Y, 0));
+          }
+          const target = on
+            ? (0.13 + 0.28 * easeOutCubic(clamp01((p - halo.threshold) / 0.1))) * (0.75 + musicLevel * 0.7 + beatKick * 0.5 + surge * 0.55)
+            : 0;
+          halo.material.opacity += (target * gutter - halo.material.opacity) * Math.min(1, dt * 2.4);
+          // Near-flat planetary rings with a slow, shallow precession — the
+          // tilt is capped so the widest ring stays clear of ground and heart.
+          // Spin rides an accumulated phase so treble can speed it up (scifi
+          // rings race, horror barely turns) without the ring ever jumping.
+          halo.phase += dt * halo.speed * (0.35 + p * 0.65) * (1 + trebleLevel * flavor.spin * 1.6);
+          halo.mesh.rotation.set(
+            Math.PI / 2 + Math.sin(t * 0.22 + halo.tilt * 9) * halo.tilt,
+            halo.phase,
+            Math.cos(t * 0.19 + halo.tilt * 5) * halo.tilt * 0.5
+          );
+          halo.mesh.scale.setScalar(1 + musicLevel * 0.03 + beatKick * 0.025);
+        }
+      }
+
+      /* progress ripples -------------------------------------------------------- */
+      const rippleIndex = Math.floor(p * 8);
+      if (!isLobby && rippleIndex > rippleStep) {
+        rippleStep = rippleIndex;
+        if (p > 0.05 && p < 0.98) spawnRipple();
+      }
+      for (const ripple of ripples) {
+        if (!ripple.alive) continue;
+        ripple.age += dt;
+        const k = ripple.age / 1.6;
+        if (k >= 1) {
+          ripple.alive = false;
+          ripple.mesh.visible = false;
+          continue;
+        }
+        const s = 1 + easeOutCubic(k) * 10.5;
+        ripple.mesh.scale.set(s, s, 1);
+        ripple.material.opacity = (1 - k) * 0.45;
+      }
+
       /* stardust vortex ------------------------------------------------------- */
       const contraction = isLobby ? charge * 0.12 : easeInOutCubic(p) * 0.72;
       const vortexSpeed = (isLobby ? 0.45 + charge * 0.5 : 0.5 + p * 1.9) * motion.swirl;
@@ -985,7 +1525,10 @@ export default function WorldForge({
         vAttr.setXYZ(i, Math.cos(angle) * radius, y, Math.sin(angle) * radius);
       }
       vAttr.needsUpdate = true;
-      vortexMaterial.opacity = (isLobby ? 0.4 + charge * 0.2 : 0.55 - easeInOutCubic(p) * 0.3) * (0.8 + musicLevel * 0.4) * gutter;
+      vortexMaterial.opacity = (isLobby ? 0.4 + charge * 0.2 : 0.55 - easeInOutCubic(p) * 0.25) * (0.8 + musicLevel * 0.4) * gutter;
+      // The dust burns brighter-per-mote as it contracts toward the heart,
+      // and sparkles with the music's high end.
+      vortexMaterial.size = 0.055 * (1 + (isLobby ? charge * 0.3 : p * 0.9)) * (1 + trebleLevel * flavor.twinkle * 0.35);
 
       /* builder stream --------------------------------------------------------- */
       const streamOn = !isLobby && frontier !== null && p < 0.97;
@@ -1015,7 +1558,7 @@ export default function WorldForge({
       /* energy draw ------------------------------------------------------------ */
       const drawAlpha = isLobby
         ? charge * 0.3
-        : (0.5 + musicLevel * 0.35) * (1 - easeInOutCubic(clamp01((p - 0.92) / 0.08)) * 0.8);
+        : (0.42 + p * 0.45 + musicLevel * 0.35) * (1 - easeInOutCubic(clamp01((p - 0.92) / 0.08)) * 0.8);
       drawMaterial.opacity += (drawAlpha * gutter - drawMaterial.opacity) * Math.min(1, dt * 2);
       if (drawMaterial.opacity > 0.02) {
         const dAttr = drawGeometry.getAttribute("position") as THREE.BufferAttribute;
@@ -1031,12 +1574,17 @@ export default function WorldForge({
       }
 
       /* weather ---------------------------------------------------------------- */
-      const weatherAlpha = isLobby ? 0.3 + charge * 0.15 : clamp01((p - 0.28) / 0.25) * 0.5;
+      // The mids drive the weather's pace (noir rain pours with the score,
+      // ash rides the swells) via an accumulated phase — no speed jumps —
+      // and treble makes the motes themselves glint.
+      weatherPhase += dt * weatherSpeed * (1 + midLevel * flavor.rush * 1.4);
+      weatherMaterial.size = visual.dust.size * 1.4 * (1 + trebleLevel * flavor.twinkle * 0.5);
+      const weatherAlpha = isLobby ? 0.3 + charge * 0.15 : clamp01((p - 0.2) / 0.25) * (0.35 + p * 0.35);
       weatherMaterial.opacity += (weatherAlpha * gutter - weatherMaterial.opacity) * Math.min(1, dt * 2);
       if (weatherMaterial.opacity > 0.02) {
         const wAttr = weatherGeometry.getAttribute("position") as THREE.BufferAttribute;
         for (let i = 0; i < WEATHER; i += 1) {
-          const y = ((wSeeds[i * 4 + 2] + t * weatherSpeed * weatherUp) % 11 + 11) % 11;
+          const y = ((wSeeds[i * 4 + 2] + weatherPhase * weatherUp) % 11 + 11) % 11;
           wAttr.setXYZ(
             i,
             wSeeds[i * 4] + Math.sin(t * 0.5 + wSeeds[i * 4 + 3]) * (0.4 + motion.wobble * 0.4),
@@ -1055,13 +1603,67 @@ export default function WorldForge({
       }
       debrisMaterial.opacity = (0.08 + musicLevel * 0.05) * gutter;
 
-      /* foundation, glyphs, heart, beam ---------------------------------------- */
+      /* theme emblems ---------------------------------------------------------- */
+      for (const emblem of emblems) {
+        const angle = emblem.phase + t * 0.055 * emblem.dir * (0.5 + motion.swirl * 0.5);
+        emblem.group.position.set(
+          Math.cos(angle) * emblem.radius,
+          emblem.y + Math.sin(t * 0.45 + emblem.phase) * 0.5,
+          Math.sin(angle) * emblem.radius
+        );
+        emblem.group.rotation.y = t * 0.18 * emblem.dir;
+        emblem.group.rotation.z = Math.sin(t * 0.33 + emblem.phase) * (0.1 + motion.wobble * 0.06);
+        const target = isLobby ? 0.2 + charge * 0.25 : 0.22 + p * 0.35;
+        emblem.material.opacity += ((target + musicLevel * 0.15 + surge * 0.3) * gutter - emblem.material.opacity) * Math.min(1, dt * 2);
+      }
+
+      /* foundation, ritual sigil, heart, beam ----------------------------------- */
       gridUniforms.uTime.value = t;
+      // Spokes drift on an accumulated phase; treble spins them up.
+      gridSpin += dt * 0.012 * (1 + trebleLevel * flavor.spin * 2);
+      gridUniforms.uSpin.value = gridSpin;
       const buildEnergy = isLobby ? 0.3 + charge * 0.35 : 0.45 + p * 0.55 - easeInOutCubic(clamp01((p - 0.9) / 0.1)) * 0.6;
       gridUniforms.uEnergy.value = (buildEnergy + musicLevel * 0.2) * gutter;
+      // The ground ripple rides the beat tracker: born at the center on each
+      // onset, racing outward and fading.
+      gridUniforms.uPulseR.value = easeOutCubic(clamp01(pulseT)) * 17;
+      gridUniforms.uPulseA.value = (1 - clamp01(pulseT)) * (0.85 + musicLevel * 0.7);
 
-      glyphRing.rotation.z = t * 0.04 * motion.ringSpeed;
-      glyphMaterial.opacity = (isLobby ? 0.2 + charge * 0.12 : 0.24 + p * 0.1 + musicLevel * 0.15) * gutter;
+      // The ritual circle turns — and spins up as it charges. Base inscription
+      // stays dim; the glow overlay above it carries the charge.
+      sigilSpin += dt * 0.04 * motion.ringSpeed * (1 + (isLobby ? 0 : p * 1.4));
+      glyphRing.rotation.z = sigilSpin;
+      glyphMaterial.opacity = (isLobby ? 0.2 + charge * 0.12 : 0.16 + musicLevel * 0.05) * gutter;
+
+      if (!isLobby) {
+        // The whole inscription charges with progress — every glyph glowing,
+        // kicked by the beat, flared by the riff.
+        sigilGlow.rotation.z = sigilSpin;
+        sigilUniforms.uCharge.value = p;
+        sigilUniforms.uTime.value = t;
+        sigilUniforms.uBeat.value = beatKick;
+        sigilUniforms.uSurge.value = surge;
+        sigilBandUniforms.uCharge.value = p * gutter;
+        sigilBandUniforms.uBeat.value = beatKick;
+
+        // Ritual embers: the curtain rises taller, denser, and faster the
+        // closer the world is to holding.
+        ritualPhase += dt * (0.3 + p * 0.9) * (1 + midLevel * 0.35);
+        const ritualTarget = p > 0.02 ? p * 0.8 * (0.75 + musicLevel * 0.5) * gutter : 0;
+        ritualMaterial.opacity += (ritualTarget - ritualMaterial.opacity) * Math.min(1, dt * 2);
+        ritualMaterial.size = 0.05 + p * 0.03 + trebleLevel * flavor.twinkle * 0.02;
+        if (ritualMaterial.opacity > 0.02) {
+          const riseH = 2.2 + p * 3.0;
+          const rAttr = ritualGeometry.getAttribute("position") as THREE.BufferAttribute;
+          for (let i = 0; i < RITUAL; i += 1) {
+            const u = (ritualSeeds[i * 4 + 1] + ritualPhase * ritualSeeds[i * 4 + 2]) % 1;
+            const ang = ritualSeeds[i * 4] + t * 0.06 * motion.swirl + u * 0.8;
+            const rad = 6.05 + ritualSeeds[i * 4 + 3] * (1 - u * 0.55);
+            rAttr.setXYZ(i, Math.cos(ang) * rad, 0.05 + u * riseH, Math.sin(ang) * rad);
+          }
+          rAttr.needsUpdate = true;
+        }
+      }
 
       const breath = Math.sin(t * 1.6) * 0.05;
       const heartScale = isLobby
@@ -1072,9 +1674,9 @@ export default function WorldForge({
       heartWireOuter.rotation.x = t * 0.21;
       heartWireOuter.rotation.z = -t * 0.13;
       heartWireInner.rotation.x = -t * 0.17;
-      heartCore.scale.setScalar(1 + Math.sin(t * 2.4) * 0.12 + musicLevel * 0.25);
+      heartCore.scale.setScalar(1 + Math.sin(t * 2.4) * 0.12 + musicLevel * 0.25 + beatKick * 0.32);
       heartGlowMaterial.opacity = (0.35 + musicLevel * 0.4 + (isLobby ? charge * 0.15 : p * 0.25)) * gutter;
-      heartLight.intensity = (isLobby ? 4 + charge * 8 : 4 + p * 22) * gutter + musicLevel * 16;
+      heartLight.intensity = (isLobby ? 4 + charge * 8 : 4 + p * 22) * gutter + musicLevel * 16 + beatKick * 11 + surge * 16;
 
       beamMaterial.opacity = ((isLobby ? 0.08 + charge * 0.1 : 0.1 + p * 0.3 - easeInOutCubic(clamp01((p - 0.92) / 0.08)) * 0.25) + musicLevel * 0.12) * gutter;
       beam.rotation.y = t * 0.5;
@@ -1121,12 +1723,41 @@ export default function WorldForge({
       camera.position.z += (tmp.z - camera.position.z) * dampZ;
       camera.lookAt(0, 1.4 + (isLobby ? 0.4 + heartLift * 0.12 : p * (1.1 + heartLift * 0.45)), 0);
 
+      /* the inscription readout ------------------------------------------------- */
+      if (!isLobby) {
+        // Redraw only when the count or the title actually changes (a sealed
+        // campaign reveals its true title mid-finale).
+        const percent = p > 0.993 ? 100 : Math.min(99, Math.floor(p * 100));
+        if (percent !== drawnPercent || titleRef.current !== drawnTitle) {
+          drawnPercent = percent;
+          drawnTitle = titleRef.current;
+          drawReadout(percent, drawnTitle || "");
+        }
+        // Camera-space anchor pinned to the bottom of the frame: distance is
+        // chosen so the block always fits horizontally, and the y drops it to
+        // the frustum's lower edge with a fixed margin — no zoom can crop it.
+        const halfV = Math.tan((camera.fov * Math.PI) / 360);
+        const halfH = halfV * camera.aspect;
+        const readoutDist = Math.max(7.2, 2.5 / Math.max(halfH, 0.15));
+        readout.position.set(0, -(readoutDist * halfV - 1.55) + Math.sin(t * 0.9) * 0.04, -readoutDist);
+        const finaleGlow = finaleT >= 0 && finaleT <= 1.2 ? (1.2 - finaleT) * 0.35 : 0;
+        readoutMaterial.opacity += (0.96 - readoutMaterial.opacity) * Math.min(1, dt * 1.4);
+        const readoutScale = 1 + finaleGlow * 0.12 + beatKick * 0.012;
+        readout.scale.set(4.4 * readoutScale, 2.75 * readoutScale, 1);
+      }
+
       renderer.render(scene, camera);
     };
 
     if (reducedMotion) {
-      // A still frame: the world as built as progress says, no animation.
+      // A still frame: the world as built as progress says, no animation —
+      // with the readout and ritual at full strength, since there's no
+      // fade-in to ride.
       smoothP = isLobby ? 0 : Math.max(0.6, progressRef.current);
+      if (!isLobby) {
+        readoutMaterial.opacity = 0.96;
+        ritualMaterial.opacity = smoothP * 0.7;
+      }
       renderFrame();
     } else {
       const loop = () => {
