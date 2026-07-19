@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCampaign, getCampaignLock, listCampaigns, saveCampaign, logCampaignDebug } from "@/lib/campaign/store";
 import { createId } from "@/lib/utils/ids";
-import { runDungeonMaster, runProfileGeneration, serverLog, serverError } from "@/lib/aqua/chat";
+import { runDungeonMaster, runProfileGeneration, waitForDmIdle, serverLog, serverError } from "@/lib/aqua/chat";
 
 export const dynamic = "force-dynamic";
 
@@ -150,6 +150,11 @@ export async function POST(request: Request) {
                   `3. Reuse the current background unless a new image is clearly needed.`
                 ].join("\n");
                 
+                // Wait for the table to be genuinely idle — generation
+                // finished, the TV done playing out the previous turn's beats,
+                // no half-locked exploration round — so a new arrival never
+                // interrupts a story beat in flight (feedback #7).
+                await waitForDmIdle(campaign.id);
                 await runDungeonMaster(campaign.id, verifiedPlayer.name, integrateMessage, { hiddenUserMessage: true });
               }
 
@@ -220,6 +225,10 @@ export async function POST(request: Request) {
 
         // Trigger DM rejoin processing in background
         (async () => {
+          // Wait for the table to be genuinely idle before weaving a return,
+          // mirroring the departure/return path in the party sweep — a rejoin
+          // must not talk over a story beat in flight (feedback #7).
+          await waitForDmIdle(campaign.id);
           const bgRelease = await getCampaignLock(campaign.id).acquire();
           try {
             serverLog("API join background", `Initiating background rejoin handling for player: ${player.characterName || player.name}`);
