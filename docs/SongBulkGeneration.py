@@ -553,6 +553,21 @@ def discover_shelves(styles: dict[str, str], create_missing: bool) -> list[Shelf
 # API: submit / poll / download
 # ---------------------------------------------------------------------------
 
+class QuotaExceededError(RuntimeError):
+    """The API reports the daily music quota is exhausted (resets UTC midnight)."""
+
+
+def raise_if_quota_exceeded(payload: Any) -> None:
+    """Raise QuotaExceededError when an API payload/body mentions quota exhaustion."""
+    if isinstance(payload, dict):
+        text = f"{payload.get('error', '')} {payload.get('message', '')}"
+    else:
+        text = str(payload)
+    if "quota" in text.lower():
+        message = payload.get("message") if isinstance(payload, dict) else None
+        raise QuotaExceededError(message or "daily music quota exceeded")
+
+
 def api_request(url: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -576,11 +591,14 @@ def api_request(url: str, payload: dict[str, Any] | None = None) -> dict[str, An
             raise RuntimeError("Stop requested during network retry")
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
-                return json.load(response)
+                result = json.load(response)
+                raise_if_quota_exceeded(result)
+                return result
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
             last_error = error
             if error.code in RETRYABLE_HTTP_CODES and attempt < MAX_NETWORK_RETRIES:
+                raise_if_quota_exceeded(detail)
                 delay = RETRY_BASE_SECONDS * attempt
                 print(
                     f"HTTP {error.code} (attempt {attempt}/{MAX_NETWORK_RETRIES}); "
@@ -590,6 +608,7 @@ def api_request(url: str, payload: dict[str, Any] | None = None) -> dict[str, An
                 if interruptible_sleep(delay):
                     raise RuntimeError("Stop requested during network retry") from error
                 continue
+            raise_if_quota_exceeded(detail)
             raise RuntimeError(f"HTTP {error.code}: {detail}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             last_error = error
@@ -701,6 +720,7 @@ def download(url: str, destination: Path) -> None:
             last_error = error
             destination.unlink(missing_ok=True)
             if error.code in RETRYABLE_HTTP_CODES and attempt < MAX_NETWORK_RETRIES:
+                raise_if_quota_exceeded(detail)
                 delay = RETRY_BASE_SECONDS * attempt
                 print(
                     f"Download HTTP {error.code} (attempt {attempt}/{MAX_NETWORK_RETRIES}); "
@@ -710,6 +730,7 @@ def download(url: str, destination: Path) -> None:
                 if interruptible_sleep(delay):
                     raise RuntimeError("Stop requested during download retry") from error
                 continue
+            raise_if_quota_exceeded(detail)
             raise RuntimeError(f"HTTP {error.code}: {detail}") from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             last_error = error
@@ -763,6 +784,8 @@ def _poll_one(job: Job) -> tuple[Job, dict[str, Any] | None, str | None]:
     """Poll a single job; return (job, response, error_message)."""
     try:
         return job, api_request(job.task_url), None
+    except QuotaExceededError:
+        raise
     except (RuntimeError, OSError) as error:
         return job, None, str(error)
 
@@ -777,7 +800,10 @@ def poll_jobs(jobs: list[Job]) -> None:
             )
         print(f"Polling {len(active)} job(s); next check in {POLL_SECONDS}s.")
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as executor:
-            results = list(executor.map(_poll_one, active))
+            try:
+                results = list(executor.map(_poll_one, active))
+            except QuotaExceededError as error:
+                raise QuotaExceededError(str(error)) from error
 
         next_active: list[Job] = []
         for job, response, error in results:
@@ -796,6 +822,8 @@ def poll_jobs(jobs: list[Job]) -> None:
             if response.get("ok") and status == "done":
                 try:
                     complete_job(job, response)
+                except QuotaExceededError:
+                    raise
                 except (RuntimeError, OSError) as download_error:
                     print(
                         f"FAILED download {job.shelf.relative_path} "
@@ -948,13 +976,20 @@ def main() -> int:
     print("Tip: Ctrl+C once to stop after the current batch finishes.")
 
     stopped_early = False
+    quota_stop = False
     for start in range(0, len(planned), workers):
-        if stop_requested():
+        if stop_requested() or quota_stop:
             remaining = len(planned) - start
-            print(
-                f"\nStop requested — not starting remaining {remaining} pair job(s).",
-                file=sys.stderr,
-            )
+            if quota_stop:
+                print(
+                    f"\nQuota exceeded — not starting remaining {remaining} pair job(s).",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"\nStop requested — not starting remaining {remaining} pair job(s).",
+                    file=sys.stderr,
+                )
             stopped_early = True
             break
 
@@ -970,15 +1005,28 @@ def main() -> int:
                 shelf, slot = futures[future]
                 try:
                     jobs.append(future.result())
+                except QuotaExceededError as error:
+                    quota_stop = True
+                    print(
+                        f"QUOTA EXCEEDED {shelf.relative_path} slots {slot}-{slot + 1}: {error}",
+                        file=sys.stderr,
+                    )
                 except (RuntimeError, OSError) as error:
                     print(
                         f"SUBMIT FAILED {shelf.relative_path} slots {slot}-{slot + 1}: {error}",
                         file=sys.stderr,
                     )
         if jobs:
-            poll_jobs(jobs)
+            try:
+                poll_jobs(jobs)
+            except QuotaExceededError as error:
+                quota_stop = True
+                print(f"QUOTA EXCEEDED while polling: {error}", file=sys.stderr)
 
     print("=" * 72)
+    if quota_stop:
+        print("Stopped: daily music quota exceeded (resets at UTC midnight).")
+        return 0
     if stopped_early or stop_requested():
         print("Stopped gracefully.")
         return 0
@@ -993,6 +1041,9 @@ if __name__ == "__main__":
         # Fallback if signal handler did not catch it (e.g. during import).
         print("\nInterrupted.", file=sys.stderr)
         raise SystemExit(130)
+    except QuotaExceededError as error:
+        print(f"QUOTA EXCEEDED: {error}", file=sys.stderr)
+        raise SystemExit(0)
     except (RuntimeError, OSError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)
