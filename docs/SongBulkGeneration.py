@@ -74,7 +74,7 @@ API_URL = "https://api.paxsenix.org/ai-music/suno-music"
 
 ALLOWED_TARGETS = (4, 6, 8)
 DEFAULT_TARGET = 6
-DEFAULT_WORKERS = 2
+DEFAULT_WORKERS = 8
 POLL_SECONDS = 60
 BAD_DURATION_SECONDS = 7 * 60 + 50  # 7:50
 # Reject downloads that are clearly not real tracks (error pages, stubs, etc.).
